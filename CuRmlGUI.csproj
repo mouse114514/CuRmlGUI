@@ -1,0 +1,86 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>CuRmlGUI</AssemblyName>
+    <RootNamespace>CuRmlGUI</RootNamespace>
+    <LangVersion>11</LangVersion>
+    <Nullable>disable</Nullable>
+    <Version>0.1.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DebugType>portable</DebugType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Copy NuGet dependencies (SkiaSharp) to the output so they can be deployed
+         alongside the plugin. References marked Private=false are not copied. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Only compile sources under src/. Exclude tool folders so that the generated
+         AssemblyInfo of tools/render-test is not compiled twice (CS0579). -->
+    <Compile Remove="tools\**" />
+    <Compile Remove="native\**" />
+    <Compile Remove="third_party\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BepInEx / Harmony / game assemblies: compile-time only, never shipped. -->
+    <Reference Include="BepInEx">
+      <HintPath>E:\work\Cu-SaveManager-main\references\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>E:\work\Cu-SaveManager-main\references\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Casualties Unknown\CasualtiesUnknown_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- uGUI presentation layer (Canvas / RawImage / CanvasScaler). -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Rasterizer / compositor backend.
+         SkiaSharp 2.x is unusable here: its net462 asset references
+         System.Runtime.InteropServices.RuntimeInformation, which pulls the whole
+         netstandard 1.x facade chain (System.Runtime 4.0.0.0, System.Threading, ...);
+         Unity's Mono ships none of them and has no binding redirects.
+         SkiaSharp 1.68.3 references only mscorlib/System/System.Core plus
+         System.Memory and System.Buffers, and bundles the native library itself. -->
+    <PackageReference Include="SkiaSharp" Version="1.68.3" />
+  </ItemGroup>
+
+</Project>

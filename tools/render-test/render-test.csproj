@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Offscreen rendering harness. Runs the native WebGUINative.dll with the
+    *same* SkiaCompositor source that the plugin uses, and writes PNGs plus
+    pixel assertions. Used to verify the Y axis, premultiplied colors, glyph
+    atlas sampling and clipping before shipping into the game.
+
+    Target framework / SkiaSharp version intentionally mirror the plugin
+    (net472 + SkiaSharp 1.68.3) so the native libSkiaSharp behavior under test
+    is the one that actually runs in Unity.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>render-test</AssemblyName>
+    <RootNamespace>CuRmlGUI.RenderTest</RootNamespace>
+    <!-- SkiaSharp 1.68.3 ships win-x86 and win-x64 natives; Unity is 64-bit, so
+         force a 64-bit host here too (default AnyCPU would prefer 32-bit). -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Probe.cs" />
+    <Compile Include="ReflectDump.cs" />
+    <Compile Include="..\..\src\Native\NativeMethods.cs" Link="NativeMethods.cs" />
+    <Compile Include="..\..\src\Native\Utf8.cs" Link="Utf8.cs" />
+    <Compile Include="..\..\src\Render\SkiaCompositor.cs" Link="SkiaCompositor.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="1.68.3" />
+  </ItemGroup>
+
+</Project>

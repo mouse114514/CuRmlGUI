@@ -1,0 +1,34 @@
+# ---- .NET / C# ----
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.nupkg
+
+# ---- Native build (CMake/MSVC) ----
+native/build/
+native/out/
+**/*.obj
+**/*.pdb
+**/*.ilk
+**/*.exp
+**/*.lib
+**/*.tlog
+
+# ---- Third-party source fetched at build time (pinned) ----
+third_party/
+
+# ---- Tools: fetched fonts & generated test images ----
+tools/font-probe/out/
+tools/render-test/*.png
+
+# ---- Deployed / packaged artifacts ----
+*.zip
+publish/
+
+# ---- OS ----
+Thumbs.db
+.DS_Store
+
+native/build_log.txt
