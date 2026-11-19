@@ -99,6 +99,18 @@ namespace CuRmlGUI
             return NativeMethods.wg_load_font(_ctx, Utf8.ToNullTerminated(path)) != 0;
         }
 
+        /// <summary>
+        /// 按元素 id 设置其文本内容（替换原内容，HTML 自动转义）。
+        /// 返回 false 表示元素不存在或上下文已释放。
+        /// </summary>
+        public bool SetElementText(string id, string text)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(id)) return false;
+            return NativeMethods.wg_set_element_text(
+                _ctx, Utf8.ToNullTerminated(id), Utf8.ToNullTerminated(text ?? string.Empty)) != 0;
+        }
+
         public void SetSize(int width, int height, float dpiScale = 1f)
         {
             ThrowIfDisposed();

@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CuRmlGuiSample - a minimal consumer mod showing how to use CuRmlGUI.
+
+    Build with:  dotnet build samples\CuRmlGuiSample\CuRmlGuiSample.csproj -c Release
+    Deploy:      copy bin\Release\CuRmlGuiSample.dll to BepInEx\plugins\CuRmlGuiSample\
+                 (CuRmlGUI.dll must already be installed in BepInEx\plugins\CuRmlGUI\)
+  -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>CuRmlGuiSample</AssemblyName>
+    <RootNamespace>CuRmlGuiSample</RootNamespace>
+    <LangVersion>11</LangVersion>
+    <Nullable>disable</Nullable>
+    <Version>0.1.0</Version>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BepInEx / Unity: compile-time only. -->
+    <Reference Include="BepInEx">
+      <HintPath>E:\work\Cu-SaveManager-main\references\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- CuRmlGUI library. BepInEx loads it as its own plugin (BepInDependency
+         guarantees order); Private=false so it is not copied alongside this DLL. -->
+    <Reference Include="CuRmlGUI">
+      <HintPath>..\..\bin\Release\CuRmlGUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

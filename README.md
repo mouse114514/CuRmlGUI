@@ -29,11 +29,11 @@ IMGUI 或 uGUI 呈现。**只做渲染，绝不执行 JavaScript。**
 using CuRmlGUI;
 
 var view = new WebGuiView(1280, 720);   // 创建 RmlUi 上下文 + 离屏合成器
-view.LoadFont(Path.Combine(dir, "assets", "fonts", "curmlgui-latin.ttf"));
-view.LoadFont(Path.Combine(dir, "assets", "fonts", "curmlgui-cjk.otf")); // CJK 回退
+WebGuiFonts.LoadDefault(view);          // 加载随插件发行的字体（Latin + CJK 回退）
 view.LoadDocument("<rml><body><div id='hello'>你好</div></body></rml>", css);
 
 view.ElementEvent += (type, id) => Debug.Log($"event {type} / {id}");
+view.SetElementText("hello", "更新后的文本");   // 通过 RmlUi DOM 回写元素内容
 
 // 每帧（主线程）：
 view.Update();                              // 有变化才重绘并上传纹理
@@ -104,6 +104,33 @@ cd tools\render-test\bin\Release\net472
 ```
 
 输出 `ALL CHECKS PASSED` 表示坐标/颜色/预乘/字形/裁剪/`Modulate` 全部正确。
+
+## 示例 mod
+
+`samples/CuRmlGuiSample/` 是一个最小可运行的消费方模组，演示完整的接入流程：
+创建 `WebGuiView` → `WebGuiFonts.LoadDefault` → 加载文档 → 每帧输入转发 +
+`Update()` → `OnGUI` 绘制；按钮点击经 `ElementEvent` 回 C#，再 `SetElementText`
+回写计数。构建后把 `CuRmlGuiSample.dll` 放到 `BepInEx\plugins\CuRmlGuiSample\`
+（CuRmlGUI 已装在 `BepInEx\plugins\CuRmlGUI\`），进游戏即见左上角示例窗口。
+
+## 核心 API
+
+| 成员 | 说明 |
+| --- | --- |
+| `WebGuiView(w, h, dpi=1)` | 一个 RmlUi 上下文 + 离屏 Skia 合成器（`IDisposable`） |
+| `LoadDocument(rml, rcss)` | 载入 RML/RCSS 文档 |
+| `UnloadDocument()` | 卸载当前文档 |
+| `LoadFont(path)` | 加载字体（ttf/otf，`fallback_face=true` 同时注册族名与回退） |
+| `SetElementText(id, text)` | 按元素 id 回写文本内容（HTML 自动转义） |
+| `SetSize(w, h, dpi)` | 更新上下文尺寸/DPI |
+| `Update()` → bool | 推进一帧；有变化才重绘并上传纹理 |
+| `Texture` / `Width` / `Height` | 结果纹理（RGBA32）与尺寸 |
+| `ElementEvent` | 事件：(eventType, elementId)，如 `click`/`mouseover`/`change` |
+| `MouseMove/Down/Up/Wheel` | 鼠标输入（左上原点逻辑像素） |
+| `KeyDown/KeyUp` | 键盘（`KeyCode` → RmlUi 键标识） |
+| `TextInput(char)` / `TextInputCodepoint(uint)` | 文本输入（代理对走码点） |
+| `WebGuiFonts.LatinPath` / `.CjkPath` / `.LoadDefault(view)` | CuRmlGUI 发行字体路径与加载 |
+| `PresentationMode.ImGui` / `.UGui` | 呈现层选择（OnGUI 或 Canvas+RawImage） |
 
 ## 关键约束（设计决策）
 

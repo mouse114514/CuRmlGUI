@@ -21,6 +21,7 @@
     <Compile Remove="tools\**" />
     <Compile Remove="native\**" />
     <Compile Remove="third_party\**" />
+    <Compile Remove="samples\**" />
   </ItemGroup>
 
   <ItemGroup>

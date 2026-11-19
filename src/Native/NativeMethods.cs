@@ -97,6 +97,10 @@ namespace CuRmlGUI.Native
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern int wg_load_font(IntPtr ctx, byte[] path);
 
+        // ------------------------------------------------------------------ DOM
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern int wg_set_element_text(IntPtr ctx, byte[] id, byte[] text);
+
         // ------------------------------------------------------------------ 帧
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern int wg_update(IntPtr ctx);

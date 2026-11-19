@@ -408,6 +408,32 @@ int wg_load_font(WG_Context* ctx, const char* path)
     return Rml::LoadFontFace(String(path), /*fallback_face=*/true) ? 1 : 0;
 }
 
+int wg_set_element_text(WG_Context* ctx, const char* id, const char* text)
+{
+    if (!ctx || !ctx->ctx || !id || !text) return 0;
+    ElementDocument* doc = ctx->doc;   // wg_load_document 时保存的当前文档
+    if (!doc) return 0;
+    Element* el = doc->GetElementById(String(id));
+    if (!el) return 0;
+
+    // SetInnerRML 会解析标记：对纯文本需做 HTML 转义，防止内容里的 < > & 被当标签。
+    std::string esc;
+    esc.reserve(std::strlen(text) + 8);
+    for (const char* p = text; *p; ++p)
+    {
+        switch (*p)
+        {
+            case '&': esc += "&amp;"; break;
+            case '<': esc += "&lt;"; break;
+            case '>': esc += "&gt;"; break;
+            case '"': esc += "&quot;"; break;
+            default:  esc += *p; break;
+        }
+    }
+    el->SetInnerRML(String(esc.c_str(), esc.size()));
+    return 1;
+}
+
 int wg_update(WG_Context* ctx)
 {
     if (!ctx || !ctx->ctx) return 0;

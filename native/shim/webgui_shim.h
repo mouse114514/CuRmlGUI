@@ -97,6 +97,10 @@ WG_API void wg_unload_document(WG_Context* ctx);
 WG_API void wg_set_size(WG_Context* ctx, int width, int height, float dpi_scale);
 WG_API int  wg_load_font(WG_Context* ctx, const char* path);
 
+/* ---- DOM 操作 ---- */
+/* 按元素 id 设置其文本内容（HTML 转义后写入 inner RML）。返回 1=找到并设置。 */
+WG_API int  wg_set_element_text(WG_Context* ctx, const char* id, const char* text);
+
 /* ---- 帧 ---- */
 WG_API int  wg_update(WG_Context* ctx); /* 返回 1=有更新，0=无变化 */
 WG_API void wg_render(WG_Context* ctx); /* 触发渲染回调 */
