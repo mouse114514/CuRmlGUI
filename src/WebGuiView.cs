@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using CuRmlGUI.Native;
 using CuRmlGUI.Render;
 using UnityEngine;
@@ -24,6 +25,14 @@ namespace CuRmlGUI
         private Texture2D _texture;
         private bool _disposed;
 
+        // 按需渲染：还要在接下来多少帧重绘。
+        // RmlUi 6.3 的 Context::Update() 无条件返回 true（不再报告脏状态），
+        // 因此脏状态由本类自行维护：输入、文档变更、backdrop 更新、动画计时器。
+        private int _renderLinger;
+
+        // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
+        private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
+
         // 委托必须作为字段长期持有：否则 GC 回收后原生层持有的是悬空函数指针。
         private readonly NativeMethods.DrawGeometryFn _drawFn;
         private readonly NativeMethods.CreateTextureFn _createTexFn;
@@ -31,6 +40,13 @@ namespace CuRmlGUI
         private readonly NativeMethods.GenerateTextureFn _genTexFn;
         private readonly NativeMethods.SetScissorFn _scissorFn;
         private readonly NativeMethods.EventFn _eventFn;
+        private readonly NativeMethods.CompileFilterFn _compileFilterFn;
+        private readonly NativeMethods.ReleaseFilterFn _releaseFilterFn;
+        private readonly NativeMethods.PushLayerFn _pushLayerFn;
+        private readonly NativeMethods.PopLayerFn _popLayerFn;
+        private readonly NativeMethods.CompositeLayersFn _compositeLayersFn;
+        private readonly NativeMethods.SaveLayerAsMaskImageFn _saveMaskFn;
+        private readonly NativeMethods.SaveLayerAsTextureFn _saveTextureFn;
 
         /// <summary>元素事件（点击/悬停/焦点/change 等）。参数：(eventType, elementId)。</summary>
         public event Action<string, string> ElementEvent;
@@ -62,6 +78,13 @@ namespace CuRmlGUI
             _genTexFn = OnGenerateTexture;
             _scissorFn = OnSetScissor;
             _eventFn = OnElementEvent;
+            _compileFilterFn = OnCompileFilter;
+            _releaseFilterFn = OnReleaseFilter;
+            _pushLayerFn = OnPushLayer;
+            _popLayerFn = OnPopLayer;
+            _compositeLayersFn = OnCompositeLayers;
+            _saveMaskFn = OnSaveLayerAsMaskImage;
+            _saveTextureFn = OnSaveLayerAsTexture;
 
             _ctx = NativeMethods.wg_context_create(width, height, dpiScale <= 0f ? 1f : dpiScale);
             if (_ctx == IntPtr.Zero)
@@ -71,6 +94,11 @@ namespace CuRmlGUI
                 _ctx, IntPtr.Zero,
                 _drawFn, _createTexFn, _destroyTexFn, _genTexFn, _scissorFn);
 
+            NativeMethods.wg_set_layer_callbacks(
+                _ctx, IntPtr.Zero,
+                _compileFilterFn, _releaseFilterFn, _pushLayerFn, _popLayerFn,
+                _compositeLayersFn, _saveMaskFn, _saveTextureFn);
+
             NativeMethods.wg_set_event_callback(_ctx, IntPtr.Zero, _eventFn);
         }
 
@@ -79,16 +107,19 @@ namespace CuRmlGUI
         public bool LoadDocument(string rml, string rcss = null)
         {
             ThrowIfDisposed();
-            return NativeMethods.wg_load_document(
+            bool ok = NativeMethods.wg_load_document(
                 _ctx,
                 Utf8.ToNullTerminated(rml ?? string.Empty),
                 Utf8.ToNullTerminated(rcss ?? string.Empty)) != 0;
+            RequestRender();
+            return ok;
         }
 
         public void UnloadDocument()
         {
             if (_disposed) return;
             NativeMethods.wg_unload_document(_ctx);
+            RequestRender();
         }
 
         /// <summary>加载字体文件（ttf/otf）。路径可为绝对路径。失败返回 false。</summary>
@@ -107,8 +138,10 @@ namespace CuRmlGUI
         {
             ThrowIfDisposed();
             if (string.IsNullOrEmpty(id)) return false;
-            return NativeMethods.wg_set_element_text(
+            bool ok = NativeMethods.wg_set_element_text(
                 _ctx, Utf8.ToNullTerminated(id), Utf8.ToNullTerminated(text ?? string.Empty)) != 0;
+            RequestRender();
+            return ok;
         }
 
         public void SetSize(int width, int height, float dpiScale = 1f)
@@ -116,25 +149,81 @@ namespace CuRmlGUI
             ThrowIfDisposed();
             _compositor.Resize(width, height);
             NativeMethods.wg_set_size(_ctx, width, height, dpiScale <= 0f ? 1f : dpiScale);
+            RequestRender();
+        }
+
+        // ------------------------------------------------------------------ backdrop（磨砂玻璃源）
+
+        /// <summary>是否有 backdrop（游戏像素）注入。</summary>
+        public bool HasBackdrop => _compositor.HasBackdrop;
+
+        /// <summary>
+        /// 注入 backdrop 像素（绘制在界面最底层，供 <c>backdrop-filter</c> 模糊）。
+        /// 用于「真·毛玻璃」：把面板后面的游戏画面抓下来喂给合成器。
+        /// </summary>
+        /// <param name="rgba">RGBA 像素，top-down 行序（第 0 行 = 视觉顶部）。</param>
+        /// <param name="width">源图像像素宽。</param>
+        /// <param name="height">源图像像素高。</param>
+        /// <param name="destX">目标左上角 X（视图逻辑像素）。</param>
+        /// <param name="destY">目标左上角 Y（视图逻辑像素）。</param>
+        /// <param name="destWidth">目标宽（视图逻辑像素）。源图像会拉伸铺满该区域，
+        /// 因此降采样抓屏（如 1/4 分辨率）可正确覆盖整个视口。</param>
+        /// <param name="destHeight">目标高（视图逻辑像素）。</param>
+        public void SetBackdrop(byte[] rgba, int width, int height, int destX, int destY, int destWidth, int destHeight)
+        {
+            if (_disposed) return;
+            _compositor.SetBackdrop(rgba, width, height, destX, destY, destWidth, destHeight);
+        }
+
+        /// <summary>清除 backdrop（界面回到透明背景）。</summary>
+        public void ClearBackdrop()
+        {
+            if (_disposed) return;
+            _compositor.ClearBackdrop();
         }
 
         // ------------------------------------------------------------------ 帧
 
         /// <summary>
-        /// 推进一帧。仅当 RmlUi 报告有变化时才重绘并上传纹理。
+        /// 推进一帧。
         /// </summary>
+        /// <remarks>
+        /// RmlUi 6.3 的 <c>Context::Update()</c> 无条件返回 true（不再报告脏状态），
+        /// 因此「有变化才重绘」由本类自行维护：<see cref="RequestRender"/> 在输入、
+        /// 文档/尺寸/文本变更、backdrop 更新时被调用；动画与计时器由
+        /// <c>wg_update_delay</c>（<c>GetNextUpdateDelay</c>）报告。
+        /// 注意 hover/布局变更**不**会请求更新，故输入方法内部已标记脏。
+        /// </remarks>
         /// <returns>本帧是否有更新（即纹理是否被重写）。</returns>
         public bool Update()
         {
             if (_disposed || _ctx == IntPtr.Zero) return false;
-            if (NativeMethods.wg_update(_ctx) == 0) return false;
+
+            // 每帧调用 Update：RmlUi 内部仅在脏时做布局，开销很小。
+            NativeMethods.wg_update(_ctx);
+
+            if (_compositor.ConsumeBackdropDirty()) RequestRender();
+            // <= 0：动画/计时器（滑块箭头、输入光标闪烁、滚动箭头）进行中，需立即渲染。
+            if (NativeMethods.wg_update_delay(_ctx) <= 0.0) RequestRender();
+
+            if (_renderLinger <= 0) return false;
 
             _compositor.BeginFrame();
-            NativeMethods.wg_render(_ctx);     // 同步触发 DrawGeometry / CreateTexture 回调
+            NativeMethods.wg_render(_ctx);     // 同步触发 DrawGeometry / CreateTexture / 图层回调
             _compositor.EndFrame();
 
             UploadTexture();
+            _renderLinger--;
             return true;
+        }
+
+        /// <summary>
+        /// 请求重绘。linger 留 2 帧，覆盖布局/事件在后续帧的传播
+        /// （例如事件处理器里 <see cref="SetElementText"/> 触发的重新排版）。
+        /// </summary>
+        private void RequestRender()
+        {
+            if (_renderLinger < 2) _renderLinger = 2;
         }
 
         private void UploadTexture()
@@ -162,37 +251,48 @@ namespace CuRmlGUI
         public void MouseMove(float x, float y)
         {
             if (!IsValid) return;
+            // 去重：调用方常每帧转发当前位置；位置未变则不转发、不标记重绘。
+            if (x == _lastMouseX && y == _lastMouseY) return;
+            _lastMouseX = x;
+            _lastMouseY = y;
             NativeMethods.wg_mouse_move(_ctx, x, y);
+            RequestRender();
         }
 
         public void MouseDown(float x, float y, int button = 0)
         {
             if (!IsValid) return;
             NativeMethods.wg_mouse_down(_ctx, x, y, button);
+            RequestRender();
         }
 
         public void MouseUp(float x, float y, int button = 0)
         {
             if (!IsValid) return;
             NativeMethods.wg_mouse_up(_ctx, x, y, button);
+            RequestRender();
         }
 
         public void MouseWheel(float dx, float dy)
         {
             if (!IsValid) return;
+            if (dx == 0f && dy == 0f) return;
             NativeMethods.wg_mouse_wheel(_ctx, dx, dy);
+            RequestRender();
         }
 
         public void KeyDown(KeyCode key, int modifierState = 0)
         {
             if (!IsValid) return;
             NativeMethods.wg_key_down(_ctx, (int)KeyMap.ToRml(key), modifierState);
+            RequestRender();
         }
 
         public void KeyUp(KeyCode key, int modifierState = 0)
         {
             if (!IsValid) return;
             NativeMethods.wg_key_up(_ctx, (int)KeyMap.ToRml(key), modifierState);
+            RequestRender();
         }
 
         /// <summary>
@@ -209,6 +309,7 @@ namespace CuRmlGUI
         {
             if (!IsValid) return;
             NativeMethods.wg_text_input(_ctx, codepoint);
+            RequestRender();
         }
 
         // ------------------------------------------------------------------ 原生回调实现
@@ -251,6 +352,78 @@ namespace CuRmlGUI
         {
             try { _compositor.SetScissor(x, y, width, height, enable != 0); }
             catch (Exception e) { Debug.LogError("[CuRmlGUI] SetScissor failed: " + e); }
+        }
+
+        // ------------------------------------------------------------------ 图层 / 滤镜回调
+
+        private UIntPtr OnCompileFilter(IntPtr user, IntPtr name, IntPtr filterParams)
+        {
+            try
+            {
+                var filterName = Utf8.FromPtr(name);
+                WgFilterParams p = Marshal.PtrToStructure<WgFilterParams>(filterParams);
+                int handle = _compositor.CompileFilter(filterName, ref p);
+                return (UIntPtr)(ulong)handle;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] CompileFilter failed: " + e);
+                return UIntPtr.Zero;
+            }
+        }
+
+        private void OnReleaseFilter(IntPtr user, UIntPtr filter)
+        {
+            try { _compositor.ReleaseFilter((int)filter); }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] ReleaseFilter failed: " + e); }
+        }
+
+        private UIntPtr OnPushLayer(IntPtr user)
+        {
+            try { return (UIntPtr)(ulong)_compositor.PushLayer(); }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] PushLayer failed: " + e);
+                return UIntPtr.Zero;
+            }
+        }
+
+        private void OnPopLayer(IntPtr user)
+        {
+            try { _compositor.PopLayer(); }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] PopLayer failed: " + e); }
+        }
+
+        private void OnCompositeLayers(
+            IntPtr user, UIntPtr source, UIntPtr destination,
+            int blendMode, IntPtr filters, int filterCount)
+        {
+            try
+            {
+                _compositor.CompositeLayers(
+                    (int)source, (int)destination, blendMode, filters, filterCount);
+            }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] CompositeLayers failed: " + e); }
+        }
+
+        private UIntPtr OnSaveLayerAsMaskImage(IntPtr user)
+        {
+            try { return (UIntPtr)(ulong)_compositor.SaveLayerAsMaskImage(); }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] SaveLayerAsMaskImage failed: " + e);
+                return UIntPtr.Zero;
+            }
+        }
+
+        private UIntPtr OnSaveLayerAsTexture(IntPtr user)
+        {
+            try { return (UIntPtr)_compositor.SaveLayerAsTexture(); }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] SaveLayerAsTexture failed: " + e);
+                return UIntPtr.Zero;
+            }
         }
 
         private void OnElementEvent(IntPtr user, IntPtr eventType, IntPtr elementId)

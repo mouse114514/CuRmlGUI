@@ -141,6 +141,9 @@ namespace CuRmlGUI.RenderTest
                 Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
             }
 
+            // backdrop-filter（磨砂玻璃）全链路：独立上下文 + 注入 backdrop。
+            BackdropTest.Run(flip);
+
             NativeMethods.wg_context_destroy(s_ctx);
             s_compositor.Dispose();
 

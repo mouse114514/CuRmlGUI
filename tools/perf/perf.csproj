@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Blur-cost microbenchmark. Target framework / SkiaSharp version mirror the plugin
+    (net472 + SkiaSharp 1.68.3) so the numbers reflect what actually runs in Unity.
+
+    Compared:
+      A) gaussian   — SKImageFilter.CreateBlur(sigma, sigma)
+      B) box-conv   — 3x chained SKImageFilter.CreateMatrixConvolution with a uniform kernel
+      C) box-manual — 3x separable box blur implemented in managed code (sliding window)
+    At two resolutions: full viewport (1920x1080) and a glass-sized region (500x450).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>perf</AssemblyName>
+    <RootNamespace>CuRmlGUI.Perf</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Bench.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="1.68.3" />
+  </ItemGroup>
+
+</Project>

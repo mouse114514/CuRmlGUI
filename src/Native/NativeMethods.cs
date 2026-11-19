@@ -16,6 +16,19 @@ namespace CuRmlGUI.Native
     }
 
     /// <summary>
+    /// 与 <c>WG_FilterParams</c>（native/shim/webgui_shim.h）二进制兼容。
+    /// sigma/value 为 float；color 为 RGBA（0-255）；offset 为 float。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WgFilterParams
+    {
+        public float Sigma;
+        public float Value;
+        public float ColorR, ColorG, ColorB, ColorA;
+        public float OffsetX, OffsetY;
+    }
+
+    /// <summary>
     /// 纯 C ABI 的 P/Invoke 声明（对应 native/shim/webgui_shim.h）。
     ///
     /// 约束：
@@ -55,6 +68,32 @@ namespace CuRmlGUI.Native
             IntPtr user, int x, int y, int width, int height, int enable);
 
         [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr CompileFilterFn(
+            IntPtr user, IntPtr name, IntPtr filterParams);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void ReleaseFilterFn(IntPtr user, UIntPtr filter);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr PushLayerFn(IntPtr user);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void PopLayerFn(IntPtr user);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void CompositeLayersFn(
+            IntPtr user,
+            UIntPtr source, UIntPtr destination,
+            int blendMode,
+            IntPtr filters, int filterCount);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr SaveLayerAsMaskImageFn(IntPtr user);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr SaveLayerAsTextureFn(IntPtr user);
+
+        [UnmanagedFunctionPointer(Cc)]
         public delegate void EventFn(IntPtr user, IntPtr eventType, IntPtr elementId);
 
         // ------------------------------------------------------------------ 只读
@@ -82,6 +121,17 @@ namespace CuRmlGUI.Native
             SetScissorFn setScissor);
 
         [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_layer_callbacks(
+            IntPtr ctx, IntPtr user,
+            CompileFilterFn compileFilter,
+            ReleaseFilterFn releaseFilter,
+            PushLayerFn pushLayer,
+            PopLayerFn popLayer,
+            CompositeLayersFn compositeLayers,
+            SaveLayerAsMaskImageFn saveLayerAsMaskImage,
+            SaveLayerAsTextureFn saveLayerAsTexture);
+
+        [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_set_event_callback(IntPtr ctx, IntPtr user, EventFn onEvent);
 
         // ------------------------------------------------------------------ 文档 / 尺寸 / 字体
@@ -107,6 +157,10 @@ namespace CuRmlGUI.Native
 
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_render(IntPtr ctx);
+
+        /// <summary>距下次需要渲染的最大延迟（秒）；INF=空闲，&lt;=0=立即。</summary>
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern double wg_update_delay(IntPtr ctx);
 
         // ------------------------------------------------------------------ 输入
         [DllImport(Dll, CallingConvention = Cc)]

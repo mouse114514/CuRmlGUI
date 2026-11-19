@@ -30,6 +30,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="Probe.cs" />
+    <Compile Include="BackdropTest.cs" />
     <Compile Include="ReflectDump.cs" />
     <Compile Include="..\..\src\Native\NativeMethods.cs" Link="NativeMethods.cs" />
     <Compile Include="..\..\src\Native\Utf8.cs" Link="Utf8.cs" />

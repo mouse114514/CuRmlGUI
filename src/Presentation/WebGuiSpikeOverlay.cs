@@ -29,6 +29,13 @@ namespace CuRmlGUI.Presentation
         private bool _autoShow;
         private bool _autoShowDone;
 
+        // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
+        private bool _backdropCapture;
+        private float _nextCapture;
+        private const float CaptureInterval = 1f / 15f;   // 15fps 节流
+        private const int BackdropScale = 4;              // 降采样 1/4
+        private bool _backdropFlipV = true;               // 截图行序是否为 bottom-up（需翻转）
+
         private WebGuiView _view;
         private UguiPresenter _ugui;
         private bool _visible;
@@ -37,16 +44,24 @@ namespace CuRmlGUI.Presentation
         private int _lastW = -1, _lastH = -1;
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
 
+        // backdrop 路径耗时统计（每 3 秒打一条日志，用于量化优化效果）。
+        private double _costAccumMs;
+        private double _renderAccumMs;
+        private int _costFrames;
+        private int _renderFrames;
+        private float _nextCostLog = -1f;
+
         // 需要转发「按下/抬起」的特殊键（字母/数字也转发，便于 Ctrl+A/C/V 等快捷键）。
         private static readonly KeyCode[] Keys = BuildKeyList();
 
-        public void Init(KeyCode toggleKey, PresentationMode mode, float dpiScale, ManualLogSource log, bool autoShow = false)
+        public void Init(KeyCode toggleKey, PresentationMode mode, float dpiScale, ManualLogSource log, bool autoShow = false, bool backdrop = false)
         {
             _toggleKey = toggleKey;
             _mode = mode;
             _dpiScale = dpiScale <= 0f ? 1f : dpiScale;
             _log = log;
             _autoShow = autoShow;
+            _backdropCapture = backdrop;
         }
 
         private void Update()
@@ -70,7 +85,34 @@ namespace CuRmlGUI.Presentation
                 if (_view == null) return;
 
                 EnsureSize();
-                _view.Update();
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                if (_backdropCapture) CaptureBackdrop();
+                sw.Stop();
+                var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                bool updated = _view.Update();
+                sw2.Stop();
+                if (updated) _renderFrames++;
+
+                if (_backdropCapture)
+                {
+                    _costAccumMs += sw.Elapsed.TotalMilliseconds;
+                    _renderAccumMs += sw2.Elapsed.TotalMilliseconds;
+                    _costFrames++;
+                    if (Time.time >= _nextCostLog)
+                    {
+                        _log?.LogInfo(string.Format(
+                            "[CuRmlGUI] backdrop: capture avg {0:F1} ms/frame + render {1:F2} ms/frame " +
+                            "({2} frames, {3} actually re-rendered).",
+                            _costAccumMs / _costFrames, _renderAccumMs / _costFrames,
+                            _costFrames, _renderFrames));
+                        _costAccumMs = 0;
+                        _renderAccumMs = 0;
+                        _costFrames = 0;
+                        _renderFrames = 0;
+                        _nextCostLog = Time.time + 3f;
+                    }
+                }
 
                 if (_mode == PresentationMode.UGui && _ugui != null)
                     _ugui.SetTexture(_view.Texture);
@@ -249,6 +291,91 @@ namespace CuRmlGUI.Presentation
             }
         }
 
+        // ------------------------------------------------------------------ backdrop 捕获（真·毛玻璃）
+
+        /// <summary>
+        /// 节流抓取游戏画面（全屏，降采样 1/4），注入 view 作为 backdrop 模糊源。
+        /// 第一版用同步 ScreenCapture（节流+降采样控制成本）；卡顿再升级 AsyncGPUReadback。
+        /// </summary>
+        private void CaptureBackdrop()
+        {
+            if (Time.time < _nextCapture) return;
+
+            Texture2D shot = null;
+            try
+            {
+                shot = ScreenCapture.CaptureScreenshotAsTexture();
+                if (shot == null) return;
+
+                int sw = shot.width, sh = shot.height;
+                if (sw <= 0 || sh <= 0) return;
+
+                int dw = Mathf.Max(1, sw / BackdropScale);
+                int dh = Mathf.Max(1, sh / BackdropScale);
+
+                // 降采样：每 BackdropScale×BackdropScale 块取 1 像素。
+                var rgba = Downsample(shot, sw, sh, dw, dh);
+                if (rgba == null) return;
+
+                // GetPixels32 行序为 bottom-up（第 0 行=屏幕底部）；SetBackdrop 契约为 top-down。
+                // 已用离屏转储验证：翻转后 spike 窗口在左上、文字正立，方向正确。
+                if (_backdropFlipV) FlipRowsV(rgba, dw, dh);
+
+                // 目标区域铺满整个视口（源是 1/4 降采样，需拉伸）；否则 backdrop 只覆盖左上角，
+                // 玻璃若位于视口右侧则模糊源为空。
+                _view.SetBackdrop(rgba, dw, dh, 0, 0, Screen.width, Screen.height);
+                _nextCapture = Time.time + CaptureInterval;
+            }
+            catch (Exception e)
+            {
+                _log?.LogError("[CuRmlGUI] Backdrop capture failed: " + e);
+                _nextCapture = Time.time + 1f;   // 失败退避
+            }
+            finally
+            {
+                if (shot != null) UnityEngine.Object.Destroy(shot);
+            }
+        }
+
+        /// <summary>
+        /// 降采样到 dw×dh：每 BackdropScale×BackdropScale 块取 1 像素（CPU 抽点）。
+        ///
+        /// 不用 <c>Texture2D.Resize</c> 做 GPU 缩放：该 API 在当前 Unity 版本是「重新初始化纹理」
+        /// （尺寸变对但像素清空），会造成黑背底。
+        /// </summary>
+        private static byte[] Downsample(Texture2D shot, int sw, int sh, int dw, int dh)
+        {
+            var src = shot.GetPixels32();
+            var rgba = new byte[dw * dh * 4];
+            for (int dy = 0; dy < dh; dy++)
+            {
+                int sy = Mathf.Min(sh - 1, dy * BackdropScale);
+                for (int dx = 0; dx < dw; dx++)
+                {
+                    int sx = Mathf.Min(sw - 1, dx * BackdropScale);
+                    Color32 c = src[sy * sw + sx];
+                    int o = (dy * dw + dx) * 4;
+                    rgba[o] = c.r; rgba[o + 1] = c.g; rgba[o + 2] = c.b; rgba[o + 3] = c.a;
+                }
+            }
+            return rgba;
+        }
+
+        /// <summary>行翻转（bottom-up → top-down）。</summary>
+        private static void FlipRowsV(byte[] rgba, int w, int h)
+        {
+            int rowBytes = w * 4;
+            var row = new byte[rowBytes];
+            for (int y = 0; y < h / 2; y++)
+            {
+                int a = y * rowBytes;
+                int b = (h - 1 - y) * rowBytes;
+                Buffer.BlockCopy(rgba, a, row, 0, rowBytes);
+                Buffer.BlockCopy(rgba, b, rgba, a, rowBytes);
+                Buffer.BlockCopy(row, 0, rgba, b, rowBytes);
+            }
+        }
+
         private static KeyCode[] BuildKeyList()
         {
             var list = new List<KeyCode>
@@ -306,6 +433,11 @@ namespace CuRmlGUI.Presentation
         <div class=""sw s4""></div>
       </div>
     </div>
+  </div>
+
+  <div id=""glass"">
+    <span class=""gtitle"">毛玻璃 Frosted</span>
+    <span class=""gbody"">backdrop-filter: blur(14px) — 背后为实时游戏画面</span>
   </div>
 </body>
 </rml>";
@@ -377,6 +509,26 @@ input {
 .s2 { background: #50e070; }
 .s3 { background: #5090ff; }
 .s4 { background: rgba(255, 255, 255, 0.35); }
+
+#glass {
+  position: absolute;
+  left: 1240px; top: 400px;
+  width: 360px; height: 280px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.10);
+  border-width: 1px;
+  border-color: rgba(255, 255, 255, 0.28);
+  border-radius: 14px;
+  backdrop-filter: blur(14px);
+  color: #ffffff;
+}
+.gtitle {
+  display: block;
+  font-size: 17px;
+  margin-bottom: 6px;
+  color: #ffffff;
+}
+.gbody { font-size: 13px; color: #d8d8ea; }
 ";
     }
 }

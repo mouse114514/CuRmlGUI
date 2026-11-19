@@ -34,6 +34,15 @@ struct Callbacks
     WG_SetScissorFn     set_scissor = nullptr;
     WG_EventFn          on_event = nullptr;
     void*               event_user = nullptr;
+
+    // 图层 / 滤镜
+    WG_CompileFilterFn          compile_filter = nullptr;
+    WG_ReleaseFilterFn          release_filter = nullptr;
+    WG_PushLayerFn              push_layer = nullptr;
+    WG_PopLayerFn               pop_layer = nullptr;
+    WG_CompositeLayersFn        composite_layers = nullptr;
+    WG_SaveLayerAsMaskImageFn   save_mask = nullptr;
+    WG_SaveLayerAsTextureFn     save_texture = nullptr;
 };
 
 // 已编译几何（含顶点/索引），句柄即其指针
@@ -127,7 +136,67 @@ public:
                             scissor_enabled ? 1 : 0);
     }
 
-    // SetTransform / 图层 / 滤镜 / shader 等高级特性 v1 不实现（使用默认行为）。
+    // ---- 图层 / 滤镜（backdrop-filter、filter、mask-image）----
+    // 托管侧负责离屏图层栈与 Skia 滤镜合成；这里只转发句柄。
+
+    LayerHandle PushLayer() override
+    {
+        if (!cb || !cb->push_layer) return 0;   // 无托管支持 → 退化为基座
+        return (LayerHandle)cb->push_layer(cb->user);
+    }
+
+    void PopLayer() override
+    {
+        if (cb && cb->pop_layer) cb->pop_layer(cb->user);
+    }
+
+    void CompositeLayers(LayerHandle source, LayerHandle destination,
+                         BlendMode blend_mode,
+                         Span<const CompiledFilterHandle> filters) override
+    {
+        if (!cb || !cb->composite_layers) return;
+        // filters 数组在回调调用期间有效，托管侧必须立即读取。
+        cb->composite_layers(cb->user,
+                             (uintptr_t)source, (uintptr_t)destination,
+                             (int)blend_mode,
+                             reinterpret_cast<const uintptr_t*>(filters.data()),
+                             (int)filters.size());
+    }
+
+    CompiledFilterHandle CompileFilter(const String& name, const Dictionary& parameters) override
+    {
+        if (!cb || !cb->compile_filter) return 0;
+
+        WG_FilterParams p;
+        p.sigma = Rml::Get(parameters, "sigma", 0.f);
+        p.value = Rml::Get(parameters, "value", 1.f);
+        const Rml::Colourb c = Rml::Get(parameters, "color", Rml::Colourb());
+        p.color[0] = c[0]; p.color[1] = c[1]; p.color[2] = c[2]; p.color[3] = c[3];
+        const Rml::Vector2f off = Rml::Get(parameters, "offset", Rml::Vector2f(0.f, 0.f));
+        p.offset_x = off.x;
+        p.offset_y = off.y;
+
+        return (CompiledFilterHandle)cb->compile_filter(cb->user, name.c_str(), &p);
+    }
+
+    void ReleaseFilter(CompiledFilterHandle filter) override
+    {
+        if (cb && cb->release_filter) cb->release_filter(cb->user, (uintptr_t)filter);
+    }
+
+    CompiledFilterHandle SaveLayerAsMaskImage() override
+    {
+        if (!cb || !cb->save_mask) return 0;
+        return (CompiledFilterHandle)cb->save_mask(cb->user);
+    }
+
+    TextureHandle SaveLayerAsTexture() override
+    {
+        if (!cb || !cb->save_texture) return 0;
+        return (TextureHandle)cb->save_texture(cb->user);
+    }
+
+    // SetTransform / shader 等 v1 不实现（使用默认行为）。
 
 private:
     bool scissor_enabled = false;
@@ -359,6 +428,28 @@ void wg_set_render_callbacks(
     ctx->dirty = true;
 }
 
+void wg_set_layer_callbacks(
+    WG_Context* ctx, void* user,
+    WG_CompileFilterFn compile_filter,
+    WG_ReleaseFilterFn release_filter,
+    WG_PushLayerFn push_layer,
+    WG_PopLayerFn pop_layer,
+    WG_CompositeLayersFn composite_layers,
+    WG_SaveLayerAsMaskImageFn save_layer_as_mask_image,
+    WG_SaveLayerAsTextureFn save_layer_as_texture)
+{
+    if (!ctx) return;
+    ctx->cb.user = user;   // 与渲染回调共用同一 user 指针
+    ctx->cb.compile_filter = compile_filter;
+    ctx->cb.release_filter = release_filter;
+    ctx->cb.push_layer = push_layer;
+    ctx->cb.pop_layer = pop_layer;
+    ctx->cb.composite_layers = composite_layers;
+    ctx->cb.save_mask = save_layer_as_mask_image;
+    ctx->cb.save_texture = save_layer_as_texture;
+    ctx->dirty = true;
+}
+
 void wg_set_event_callback(WG_Context* ctx, void* user, WG_EventFn on_event)
 {
     if (!ctx) return;
@@ -450,6 +541,12 @@ void wg_render(WG_Context* ctx)
 {
     if (ctx && ctx->ctx)
         ctx->ctx->Render();
+}
+
+double wg_update_delay(WG_Context* ctx)
+{
+    if (!ctx || !ctx->ctx) return 0.0;
+    return (double)ctx->ctx->GetNextUpdateDelay();
 }
 
 void wg_mouse_move(WG_Context* ctx, float x, float y)

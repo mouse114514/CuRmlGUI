@@ -32,6 +32,7 @@ namespace CuRmlGUI
         private ConfigEntry<PresentationMode> _spikePresentation;
         private ConfigEntry<float> _spikeDpiScale;
         private ConfigEntry<int> _spikeSortingOrder;
+        private ConfigEntry<bool> _spikeBackdrop;
 
         private void Awake()
         {
@@ -79,6 +80,10 @@ namespace CuRmlGUI
             _spikeSortingOrder = Config.Bind(
                 "Spike", "SortingOrder", 30000,
                 "uGUI 呈现时 Canvas 的 sortingOrder（越大越靠上）。");
+
+            _spikeBackdrop = Config.Bind(
+                "Spike", "Backdrop", false,
+                "抓取游戏画面作为 backdrop 注入（真·毛玻璃 backdrop-filter 的模糊源）。");
         }
 
         private void CreateSpikeOverlay()
@@ -88,9 +93,9 @@ namespace CuRmlGUI
             // 直接挂在插件自己的 GameObject 上，生命周期由 BepInEx 保证。
             var overlay = gameObject.AddComponent<WebGuiSpikeOverlay>();
             overlay.Init(_spikeToggleKey.Value, _spikePresentation.Value,
-                _spikeDpiScale.Value, Logger, _spikeAutoShow.Value);
+                _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value);
             Logger.LogInfo("Spike overlay created (press " + _spikeToggleKey.Value +
-                " to toggle, autoShow=" + _spikeAutoShow.Value + ").");
+                " to toggle, autoShow=" + _spikeAutoShow.Value + ", backdrop=" + _spikeBackdrop.Value + ").");
         }
 
         private static string Utf8Version()
