@@ -54,7 +54,21 @@ namespace CuRmlGUI.RenderTest
             return f;
         }
 
-        private static int RunScenario(bool flip, string label, BackdropBlurMode mode, int divisor)
+        /// <summary>
+        /// UV 映射诊断：注入「渐变 + 网格」backdrop。flat 色块（红/蓝）无法暴露 UV 错位
+        /// （错位目标仍是纯色），渐变网格的任一处折叠/错位/三角形化错误都会立即显现。
+        /// 模拟游戏：Real 1:1、Real 1/2（游戏降采样）、Fake 1/8。
+        /// </summary>
+        public static int RunPatterns(bool flip)
+        {
+            int f = 0;
+            f += RunScenario(flip, "pat-real-1x", BackdropBlurMode.Real, divisor: 1, pattern: true);
+            f += RunScenario(flip, "pat-real-12", BackdropBlurMode.Real, divisor: 2, pattern: true);
+            f += RunScenario(flip, "pat-fake-18", BackdropBlurMode.Fake, divisor: 8, pattern: true);
+            return f;
+        }
+
+        private static int RunScenario(bool flip, string label, BackdropBlurMode mode, int divisor, bool pattern = false)
         {
             int failures = 0;
             Console.WriteLine($"\n=== BackdropTest [{label}] (flip={flip}) ===");
@@ -100,21 +114,39 @@ namespace CuRmlGUI.RenderTest
                     return failures + 1;
                 }
 
-                // 注入 backdrop：上半红 / 下半蓝，硬边界。divisor 模拟抓屏降采样
-                // （源图较小，由合成器拉伸铺满 W×H）。
+                // 注入 backdrop。divisor 模拟抓屏降采样（源图较小，由合成器拉伸铺满 W×H）。
                 int bw = Math.Max(1, W / divisor), bh = Math.Max(1, H / divisor);
-                int srcEdge = Math.Max(1, EdgeY / divisor);
                 var backdrop = new byte[bw * bh * 4];
-                for (int y = 0; y < bh; y++)
-                    for (int x = 0; x < bw; x++)
-                    {
-                        int o = (y * bw + x) * 4;
-                        bool top = y < srcEdge;
-                        backdrop[o] = top ? (byte)255 : (byte)0;
-                        backdrop[o + 1] = 0;
-                        backdrop[o + 2] = top ? (byte)0 : (byte)255;
-                        backdrop[o + 3] = 255;
-                    }
+                if (pattern)
+                {
+                    // UV 诊断图：R=x 渐变（左→右红→绿）、G=y 渐变（上→下蓝→黄）、
+                    // B=棋盘奇偶、每 20px 白网格线。任一处 UV 折叠/错位/三角形化错误都会显现。
+                    for (int y = 0; y < bh; y++)
+                        for (int x = 0; x < bw; x++)
+                        {
+                            int o = (y * bw + x) * 4;
+                            byte r = (byte)(x * 255 / Math.Max(1, bw - 1));
+                            byte g = (byte)(y * 255 / Math.Max(1, bh - 1));
+                            byte b = (((x / 8) + (y / 8)) & 1) == 0 ? (byte)128 : (byte)0;
+                            if (x % 20 == 0 || y % 20 == 0) { r = g = b = 255; }
+                            backdrop[o] = r; backdrop[o + 1] = g;
+                            backdrop[o + 2] = b; backdrop[o + 3] = 255;
+                        }
+                }
+                else
+                {
+                    int srcEdge = Math.Max(1, EdgeY / divisor);
+                    for (int y = 0; y < bh; y++)
+                        for (int x = 0; x < bw; x++)
+                        {
+                            int o = (y * bw + x) * 4;
+                            bool top = y < srcEdge;
+                            backdrop[o] = top ? (byte)255 : (byte)0;
+                            backdrop[o + 1] = 0;
+                            backdrop[o + 2] = top ? (byte)0 : (byte)255;
+                            backdrop[o + 3] = 255;
+                        }
+                }
                 comp.SetBackdrop(backdrop, bw, bh, 0, 0, W, H);
 
                 // 推进若干帧稳定布局，再渲染最终一帧。
@@ -139,6 +171,9 @@ namespace CuRmlGUI.RenderTest
                 Console.WriteLine("  wrote " + png);
 
                 // 玻璃面板横跨边界（面板 top=120,height=80 → 120..200；边界=160）。
+                // pattern 模式只输出诊断 PNG，不做颜色断言。
+                if (!pattern)
+                {
                 if (mode == BackdropBlurMode.Fake && divisor == 1)
                 {
                     // 1:1 采样 + 伪模糊：blur 必须被跳过 → 边界像素仍是纯色（无混合）。
@@ -159,6 +194,11 @@ namespace CuRmlGUI.RenderTest
                 // 玻璃外（左边界外）：backdrop 不进入输出 → 应全透明（证明无双重绘制）。
                 failures += Check(bmp, flip, "面板外·左侧全透明（backdrop 不入输出）", 50, 130,
                     c => c.Alpha == 0 && c.Red == 0 && c.Green == 0 && c.Blue == 0, "全透明");
+                }
+                else
+                {
+                    Console.WriteLine("  [pattern] 诊断图已输出，请目视检查 UV 渐变/网格是否连续、无折叠。");
+                }
 
                 Console.WriteLine(failures == 0
                     ? "  ALL BACKDROP CHECKS PASSED"
@@ -192,13 +232,18 @@ namespace CuRmlGUI.RenderTest
             return pass ? 0 : 1;
         }
 
-        // 玻璃面板：透明背景，backdrop-filter: blur(8px)，横跨红蓝边界（160）。
+        // 玻璃面板：匹配游戏样式（半透明背景 + 圆角 + 内容文字 + backdrop-filter），
+        // 横跨红蓝边界（160）。pattern 模式下用渐变网格 backdrop 暴露任何 UV/三角形化错误。
         private const string Rml = @"
 <rml>
 <head>
 </head>
 <body>
-  <div id=""glass""></div>
+  <div id=""glass"">
+    <span class=""gtitle"">毛玻璃 Frosted</span>
+    <span class=""gbody"">backdrop-filter: blur(7px)</span>
+    <span class=""gbody2"">背后为真实背景</span>
+  </div>
 </body>
 </rml>";
 
@@ -207,16 +252,23 @@ body {
   width: 100%; height: 100%;
   margin: 0;
   background: transparent;
+  font-size: 14px;
+  color: #ffffff;
 }
 #glass {
   position: absolute;
-  left: 100px; top: 120px;
-  width: 220px; height: 80px;
-  background: transparent;
-  backdrop-filter: blur(8px);
+  left: 80px; top: 40px;
+  width: 260px; height: 240px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.10);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.3);
+  border-color: rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  backdrop-filter: blur(7px);
 }
+.gtitle { display: block; font-size: 18px; font-weight: bold; margin-bottom: 8px; }
+.gbody { display: block; font-size: 13px; color: #e8e8f5; margin-bottom: 4px; }
+.gbody2 { display: block; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
 ";
     }
 }

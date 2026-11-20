@@ -146,6 +146,9 @@ namespace CuRmlGUI.RenderTest
             s_failures += BackdropTest.Run(flip);
             s_failures += BackdropTest.RunFake(flip);
 
+            // UV 映射诊断：渐变网格 backdrop，暴露 UV 错位/三角形化错误（X 形）。
+            s_failures += BackdropTest.RunPatterns(flip);
+
             NativeMethods.wg_context_destroy(s_ctx);
             s_compositor.Dispose();
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using CuRmlGUI.Native;
 using CuRmlGUI.Render;
@@ -65,6 +66,13 @@ namespace CuRmlGUI
 
         /// <summary>像素缓冲字节数（<c>Width * Height * 4</c>）。</summary>
         public int ByteSize => _compositor.ByteSize;
+
+        /// <summary>
+        /// 上一帧应用了 backdrop-filter 的视口区域（top-down）。
+        /// 供 backdrop 捕获方做区域受限的蒙版剔除（只在这些区域内剔除自己 UI）。
+        /// </summary>
+        internal IReadOnlyList<SkiaCompositor.BackdropRegion> BackdropRegions
+            => _compositor.BackdropRegions;
 
         public bool IsValid => !_disposed && _ctx != IntPtr.Zero;
 

@@ -47,6 +47,14 @@ namespace CuRmlGUI.Render
         private SKRect _backdropDest;
         private bool _backdropDirty;
 
+        // ---- backdrop-filter 实际采样的区域（视口坐标，top-down）----
+        // 供调用方做区域受限的蒙版剔除：只需在这些区域内把「自己 UI」像素从
+        // backdrop 里剔除，避免整张 8.3MB 位图拷贝 + 全图 BFS。
+        private readonly List<BackdropRegion> _backdropRegions = new List<BackdropRegion>();
+
+        /// <summary>上一帧应用了 backdrop-filter 的视口区域（含滤镜外扩）。</summary>
+        public IReadOnlyList<BackdropRegion> BackdropRegions => _backdropRegions;
+
         /// <summary>
         /// true 时整张位图上下翻转，使内存布局变成 bottom-up（Unity Texture2D 的行序）。
         /// 对 RmlUi/Skia 而言仍是左上原点逻辑；翻转通过画布 CTM 完成，
@@ -86,6 +94,16 @@ namespace CuRmlGUI.Render
         }
 
         private enum FilterKind { Image, Mask }
+
+        /// <summary>backdrop-filter 采样的视口区域（top-down）。</summary>
+        public readonly struct BackdropRegion
+        {
+            public readonly int X, Y, Width, Height;
+            public BackdropRegion(int x, int y, int w, int h)
+            {
+                X = x; Y = y; Width = w; Height = h;
+            }
+        }
 
         private sealed class FilterEntry
         {
@@ -156,6 +174,7 @@ namespace CuRmlGUI.Render
             _canvas.Clear(SKColors.Transparent);
             _scissorEnabled = false;
             _dirty = true;
+            _backdropRegions.Clear();
         }
 
         /// <summary>帧结束：确保 Skia 把延迟指令落到像素缓冲。</summary>
@@ -385,6 +404,27 @@ namespace CuRmlGUI.Render
             // 伪模糊：跳过 backdrop 链上的 blur（source==基座 即 backdrop 所在图层）。
             // 普通 filter: blur() 的 source 是元素自己的离屏图层，不受影响。
             bool skipBlur = BackdropBlurMode == BackdropBlurMode.Fake && _backdrop != null && source == 0;
+
+            // backdrop-filter 实际采样的区域（供区域受限的蒙版剔除）。
+            // 有 backdrop 就记录：Real 模糊与 Fake 放大都会采样 backdrop 里的像素。
+            if (source == 0 && _backdrop != null)
+            {
+                if (filterCount > 0 && _scissorEnabled && !ChainHasMask(filters, filterCount))
+                {
+                    int pad = ComputeFilterPadding(filters, filterCount, skipBlur);
+                    var r = ClampToViewport(new SKRect(
+                        _scissor.Left - pad, _scissor.Top - pad,
+                        _scissor.Right + pad, _scissor.Bottom + pad));
+                    _backdropRegions.Add(new BackdropRegion(
+                        (int)r.Left, (int)r.Top,
+                        (int)(r.Right - r.Left), (int)(r.Bottom - r.Top)));
+                }
+                else
+                {
+                    // mask 或无 scissor：需要全图对齐，整张都可能被采样。
+                    _backdropRegions.Add(new BackdropRegion(0, 0, Width, Height));
+                }
+            }
 
             SKImage snapshot;
             if (filterCount > 0 && _scissorEnabled && !ChainHasMask(filters, filterCount))
