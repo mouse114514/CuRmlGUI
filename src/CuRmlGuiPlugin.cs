@@ -3,6 +3,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using CuRmlGUI.Presentation;
+using CuRmlGUI.Render;
 using UnityEngine;
 
 namespace CuRmlGUI
@@ -33,6 +34,8 @@ namespace CuRmlGUI
         private ConfigEntry<float> _spikeDpiScale;
         private ConfigEntry<int> _spikeSortingOrder;
         private ConfigEntry<bool> _spikeBackdrop;
+        private ConfigEntry<BackdropBlurMode> _spikeBackdropBlur;
+        private ConfigEntry<int> _spikeFakeBlurScale;
 
         private void Awake()
         {
@@ -84,6 +87,16 @@ namespace CuRmlGUI
             _spikeBackdrop = Config.Bind(
                 "Spike", "Backdrop", false,
                 "抓取游戏画面作为 backdrop 注入（真·毛玻璃 backdrop-filter 的模糊源）。");
+
+            _spikeBackdropBlur = Config.Bind(
+                "Spike", "BackdropBlur", BackdropBlurMode.Real,
+                "backdrop 模糊实现：Real=Skia 高斯模糊（观感真实，成本随面积增长）；" +
+                "Fake=伪模糊（不执行模糊，改用超低采样率 backdrop + 双线性放大，成本≈0，观感更\"假\"）。");
+
+            _spikeFakeBlurScale = Config.Bind(
+                "Spike", "FakeBlurScale", 16,
+                "Fake 模式下的抓屏降采样除数：每 N×N 像素取 1 个。越大越模糊、越省；" +
+                "Real 模式不使用此项（固定为 4）。");
         }
 
         private void CreateSpikeOverlay()
@@ -93,9 +106,11 @@ namespace CuRmlGUI
             // 直接挂在插件自己的 GameObject 上，生命周期由 BepInEx 保证。
             var overlay = gameObject.AddComponent<WebGuiSpikeOverlay>();
             overlay.Init(_spikeToggleKey.Value, _spikePresentation.Value,
-                _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value);
+                _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value,
+                _spikeBackdropBlur.Value, _spikeFakeBlurScale.Value);
             Logger.LogInfo("Spike overlay created (press " + _spikeToggleKey.Value +
-                " to toggle, autoShow=" + _spikeAutoShow.Value + ", backdrop=" + _spikeBackdrop.Value + ").");
+                " to toggle, autoShow=" + _spikeAutoShow.Value + ", backdrop=" + _spikeBackdrop.Value +
+                ", blur=" + _spikeBackdropBlur.Value + ").");
         }
 
         private static string Utf8Version()

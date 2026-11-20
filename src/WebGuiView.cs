@@ -57,6 +57,15 @@ namespace CuRmlGUI
         /// <summary>可供呈现层绘制的纹理；无变化时内容保持不变。</summary>
         public Texture2D Texture => _texture;
 
+        /// <summary>
+        /// 上一帧合成结果的像素指针（RGBA8888，**bottom-up** 行序）。
+        /// 供调用方读取自己绘制的区域（alpha 蒙版）——例如把「自己画的 UI」从抓屏里排除。
+        /// </summary>
+        public IntPtr Pixels => _compositor.Pixels;
+
+        /// <summary>像素缓冲字节数（<c>Width * Height * 4</c>）。</summary>
+        public int ByteSize => _compositor.ByteSize;
+
         public bool IsValid => !_disposed && _ctx != IntPtr.Zero;
 
         /// <summary>
@@ -156,6 +165,27 @@ namespace CuRmlGUI
 
         /// <summary>是否有 backdrop（游戏像素）注入。</summary>
         public bool HasBackdrop => _compositor.HasBackdrop;
+
+        /// <summary>
+        /// backdrop 模糊的实现方式（默认 <see cref="Render.BackdropBlurMode.Real"/>）。
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Render.BackdropBlurMode.Fake"/>：backdrop 链上的 <c>blur()</c> 不再执行，
+        /// 模糊观感改由「超低分辨率 backdrop + 双线性放大」提供（成本≈0，但不是高斯模糊）。
+        /// 只影响 backdrop-filter 的模糊；普通 <c>filter: blur()</c> 不受影响。
+        /// 采样率由调用方的抓屏降采样决定：开启后应把降采样除数调大（例如 4 → 16），
+        /// 否则纹理放大不足、观感接近真实像素。
+        /// </remarks>
+        public BackdropBlurMode BackdropBlurMode
+        {
+            get => _compositor.BackdropBlurMode;
+            set
+            {
+                if (_compositor.BackdropBlurMode == value) return;
+                _compositor.BackdropBlurMode = value;
+                RequestRender();
+            }
+        }
 
         /// <summary>
         /// 注入 backdrop 像素（绘制在界面最底层，供 <c>backdrop-filter</c> 模糊）。

@@ -10,18 +10,21 @@ namespace CuRmlGUI.RenderTest
     /// <summary>
     /// 验证 backdrop-filter（磨砂玻璃）全链路：
     /// RmlUi 解析 backdrop-filter: blur() → shim 转发 PushLayer/CompositeLayers/CompileFilter
-    /// → 合成器离屏图层栈 + Skia 高斯模糊 → 基座像素。
+    /// → 合成器离屏图层栈 + Skia 模糊 → 基座像素。
     ///
     /// 场景：给合成器注入一个「上半红 / 下半蓝、硬边界」的 backdrop，玻璃面板横跨边界。
-    /// 断言：面板内边界处出现红蓝**混合**（模糊的证据），远处保持纯色。
-    /// 若无 backdrop-filter，边界处应为纯红或纯蓝（无混合）。
+    ///
+    /// 三个子场景：
+    ///   real       1:1 backdrop + Real 模糊 → 边界处红蓝**混合**（高斯模糊的证据）。
+    ///   fake-8x    1/8 backdrop + Fake      → 边界处仍有混合（双线性放大的证据）。
+    ///   fake-1x    1:1 backdrop + Fake      → 边界处**不混合**（证明 blur 确实被跳过）。
+    /// 另：玻璃外应全透明（证明 backdrop 不进入最终输出，无双重绘制）。
     /// </summary>
     internal static class BackdropTest
     {
         private const int W = 420;
         private const int H = 320;
         private const int EdgeY = 160;      // backdrop 红蓝边界（逻辑 Y）
-        private static int s_failures;
 
         // 委托必须作为静态字段长期持有，否则 GC 回收后原生回调悬空。
         private static NativeMethods.DrawGeometryFn s_draw;
@@ -38,12 +41,25 @@ namespace CuRmlGUI.RenderTest
         private static NativeMethods.SaveLayerAsTextureFn s_saveTex;
         private static NativeMethods.EventFn s_event;
 
-        public static void Run(bool flip)
-        {
-            s_failures = 0;
-            Console.WriteLine($"\n=== BackdropTest (flip={flip}) ===");
+        /// <summary>真实高斯模糊路径（1:1 backdrop）。返回失败断言数。</summary>
+        public static int Run(bool flip) =>
+            RunScenario(flip, "real", BackdropBlurMode.Real, divisor: 1);
 
-            var comp = new SkiaCompositor(W, H, flipY: flip);
+        /// <summary>伪模糊路径：超低采样（放大提供模糊）+ 1:1（证明 blur 被跳过）。</summary>
+        public static int RunFake(bool flip)
+        {
+            int f = 0;
+            f += RunScenario(flip, "fake · 1/8 采样", BackdropBlurMode.Fake, divisor: 8);
+            f += RunScenario(flip, "fake · 1:1 采样", BackdropBlurMode.Fake, divisor: 1);
+            return f;
+        }
+
+        private static int RunScenario(bool flip, string label, BackdropBlurMode mode, int divisor)
+        {
+            int failures = 0;
+            Console.WriteLine($"\n=== BackdropTest [{label}] (flip={flip}) ===");
+
+            var comp = new SkiaCompositor(W, H, flipY: flip) { BackdropBlurMode = mode };
             try
             {
                 s_draw = new NativeMethods.DrawGeometryFn((u, v, vc, i, ic, t, tx, ty) =>
@@ -71,7 +87,7 @@ namespace CuRmlGUI.RenderTest
                 s_event = new NativeMethods.EventFn((u, t, id) => { });
 
                 var ctx = NativeMethods.wg_context_create(W, H, 1f);
-                if (ctx == IntPtr.Zero) { Console.WriteLine("  [FAIL] wg_context_create"); return; }
+                if (ctx == IntPtr.Zero) { Console.WriteLine("  [FAIL] wg_context_create"); return failures + 1; }
 
                 NativeMethods.wg_set_render_callbacks(ctx, IntPtr.Zero, s_draw, s_create, s_destroy, s_gen, s_scissor);
                 NativeMethods.wg_set_layer_callbacks(ctx, IntPtr.Zero, s_compile, s_release, s_push, s_pop, s_composite, s_saveMask, s_saveTex);
@@ -81,60 +97,72 @@ namespace CuRmlGUI.RenderTest
                 {
                     Console.WriteLine("  [FAIL] load_document");
                     NativeMethods.wg_context_destroy(ctx);
-                    return;
+                    return failures + 1;
                 }
 
-                // 注入 backdrop：上半红 / 下半蓝，硬边界（top-down 行序）。
-                var backdrop = new byte[W * H * 4];
-                for (int y = 0; y < H; y++)
-                    for (int x = 0; x < W; x++)
+                // 注入 backdrop：上半红 / 下半蓝，硬边界。divisor 模拟抓屏降采样
+                // （源图较小，由合成器拉伸铺满 W×H）。
+                int bw = Math.Max(1, W / divisor), bh = Math.Max(1, H / divisor);
+                int srcEdge = Math.Max(1, EdgeY / divisor);
+                var backdrop = new byte[bw * bh * 4];
+                for (int y = 0; y < bh; y++)
+                    for (int x = 0; x < bw; x++)
                     {
-                        int o = (y * W + x) * 4;
-                        bool top = y < EdgeY;
+                        int o = (y * bw + x) * 4;
+                        bool top = y < srcEdge;
                         backdrop[o] = top ? (byte)255 : (byte)0;
                         backdrop[o + 1] = 0;
                         backdrop[o + 2] = top ? (byte)0 : (byte)255;
                         backdrop[o + 3] = 255;
                     }
-                comp.SetBackdrop(backdrop, W, H, 0, 0, W, H);
+                comp.SetBackdrop(backdrop, bw, bh, 0, 0, W, H);
 
                 // 推进若干帧稳定布局，再渲染最终一帧。
                 for (int i = 0; i < 10; i++)
                 {
-                    if (NativeMethods.wg_update(ctx) == 0) continue;
+                    NativeMethods.wg_update(ctx);
                     comp.BeginFrame();
                     NativeMethods.wg_render(ctx);
                     comp.EndFrame();
                 }
 
-                // 最终帧。
                 comp.BeginFrame();
                 NativeMethods.wg_render(ctx);
                 comp.EndFrame();
 
-                // 断言（flip 时位图行序镜像，故镜像读取 Y）。
                 var bmp = comp.Bitmap;
-                Console.WriteLine("  wrote glass.png");
+                string png = "glass-" + Sanitize(label) + ".png";
                 using (var img = SKImage.FromBitmap(bmp))
                 using (var data = img.Encode(SKEncodedImageFormat.Png, 100))
-                using (var fs = File.Create("glass.png"))
+                using (var fs = File.Create(png))
                     data.SaveTo(fs);
+                Console.WriteLine("  wrote " + png);
 
                 // 玻璃面板横跨边界（面板 top=120,height=80 → 120..200；边界=160）。
-                CheckBlur(bmp, flip, "面板内·边界处红蓝混合（模糊证据）", 210, 160,
-                    c => c.Red > 30 && c.Blue > 30, "红、蓝通道同时存在");
-                CheckBlur(bmp, flip, "面板内·边界上方远处≈纯红", 210, 130,
+                if (mode == BackdropBlurMode.Fake && divisor == 1)
+                {
+                    // 1:1 采样 + 伪模糊：blur 必须被跳过 → 边界像素仍是纯色（无混合）。
+                    failures += Check(bmp, flip, "伪模糊跳过 blur·边界保持纯色", 210, 160,
+                        c => c.Blue > 200 && c.Red < 60, "纯蓝（无混合）");
+                }
+                else
+                {
+                    failures += Check(bmp, flip, "边界处红蓝混合（模糊证据）", 210, 160,
+                        c => c.Red > 30 && c.Blue > 30, "红、蓝通道同时存在");
+                }
+
+                failures += Check(bmp, flip, "边界上方远处≈纯红", 210, 130,
                     c => c.Red > 200 && c.Blue < 80, "红占优");
-                CheckBlur(bmp, flip, "面板内·边界下方远处≈纯蓝", 210, 190,
+                failures += Check(bmp, flip, "边界下方远处≈纯蓝", 210, 190,
                     c => c.Blue > 200 && c.Red < 80, "蓝占优");
 
                 // 玻璃外（左边界外）：backdrop 不进入输出 → 应全透明（证明无双重绘制）。
-                CheckBlur(bmp, flip, "面板外·左侧全透明（backdrop 不入输出）", 50, 130,
+                failures += Check(bmp, flip, "面板外·左侧全透明（backdrop 不入输出）", 50, 130,
                     c => c.Alpha == 0 && c.Red == 0 && c.Green == 0 && c.Blue == 0, "全透明");
 
-                Console.WriteLine(s_failures == 0
+                Console.WriteLine(failures == 0
                     ? "  ALL BACKDROP CHECKS PASSED"
-                    : $"  {s_failures} BACKDROP CHECK(S) FAILED");
+                    : $"  {failures} BACKDROP CHECK(S) FAILED");
 
                 NativeMethods.wg_context_destroy(ctx);
             }
@@ -142,15 +170,26 @@ namespace CuRmlGUI.RenderTest
             {
                 comp.Dispose();
             }
+            return failures;
         }
 
-        private static void CheckBlur(SKBitmap bmp, bool flip, string name, int x, int ly, Func<SKColor, bool> ok, string desc)
+        private static string Sanitize(string label)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in label)
+            {
+                if (char.IsLetterOrDigit(c) || c == '_' || c == '-') sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private static int Check(SKBitmap bmp, bool flip, string name, int x, int ly, Func<SKColor, bool> ok, string desc)
         {
             int py = flip ? (H - 1 - ly) : ly;
             var c = bmp.GetPixel(x, py);
             bool pass = ok(c);
-            if (!pass) s_failures++;
             Console.WriteLine($"  [{(pass ? "PASS" : "FAIL")}] {name} @({x},{ly}) = #{c.Red:X2}{c.Green:X2}{c.Blue:X2} ({desc})");
+            return pass ? 0 : 1;
         }
 
         // 玻璃面板：透明背景，backdrop-filter: blur(8px)，横跨红蓝边界（160）。

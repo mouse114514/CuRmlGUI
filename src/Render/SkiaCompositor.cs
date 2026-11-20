@@ -98,6 +98,8 @@ namespace CuRmlGUI.Render
             /// 用于把滤镜计算限制在「元素区域 + Pad」内，避免对整张视口图做滤镜。
             /// </summary>
             public int PadPx;
+            /// <summary>是否为高斯模糊。伪模糊模式会跳过它（观感由低分辨率 backdrop 放大提供）。</summary>
+            public bool IsBlur;
         }
 
         public SkiaCompositor(int width, int height, bool flipY = false)
@@ -380,10 +382,14 @@ namespace CuRmlGUI.Render
             if (src == null || dst == null) return;
 
             float dx = 0, dy = 0;
+            // 伪模糊：跳过 backdrop 链上的 blur（source==基座 即 backdrop 所在图层）。
+            // 普通 filter: blur() 的 source 是元素自己的离屏图层，不受影响。
+            bool skipBlur = BackdropBlurMode == BackdropBlurMode.Fake && _backdrop != null && source == 0;
+
             SKImage snapshot;
             if (filterCount > 0 && _scissorEnabled && !ChainHasMask(filters, filterCount))
             {
-                int pad = ComputeFilterPadding(filters, filterCount);
+                int pad = ComputeFilterPadding(filters, filterCount, skipBlur);
                 var region = ClampToViewport(new SKRect(
                     _scissor.Left - pad, _scissor.Top - pad,
                     _scissor.Right + pad, _scissor.Bottom + pad));
@@ -398,7 +404,7 @@ namespace CuRmlGUI.Render
 
             using (snapshot)
             {
-                var filtered = ApplyFilters(snapshot, filters, filterCount);
+                var filtered = ApplyFilters(snapshot, filters, filterCount, skipBlur);
                 try
                 {
                     using (var paint = new SKPaint())
@@ -419,6 +425,20 @@ namespace CuRmlGUI.Render
             _dirty = true;
         }
 
+        /// <summary>
+        /// backdrop 模糊的实现方式（默认 <see cref="BackdropBlurMode.Real"/>）。
+        ///
+        /// <para><see cref="BackdropBlurMode.Fake"/>：<b>backdrop 链上的 blur 滤镜不执行</b>，
+        /// 模糊观感改由「超低分辨率 backdrop + 双线性放大」提供：把游戏画面以很低的采样率
+        /// 抓下来，合成时拉伸铺满元素区域，双线性插值天然产生柔和过渡。</para>
+        ///
+        /// <para>这不是高斯模糊（过渡是线性的、缺少高斯核的频域衰减），但成本几乎为 0。</para>
+        ///
+        /// <para>只影响 source 为基座（handle 0，即 backdrop 所在图层）的滤镜链；
+        /// 普通 <c>filter: blur()</c>（source 是元素自己的离屏图层）不受影响。</para>
+        /// </summary>
+        public BackdropBlurMode BackdropBlurMode { get; set; } = BackdropBlurMode.Real;
+
         /// <summary>滤镜链里是否含 mask（mask 需与全图对齐，故不支持区域受限路径）。</summary>
         private bool ChainHasMask(IntPtr filters, int filterCount)
         {
@@ -431,13 +451,15 @@ namespace CuRmlGUI.Render
         }
 
         /// <summary>累加滤镜链所需的外扩像素（模糊/阴影会溢出元素边界）。</summary>
-        private int ComputeFilterPadding(IntPtr filters, int filterCount)
+        private int ComputeFilterPadding(IntPtr filters, int filterCount, bool skipBlur)
         {
             int pad = 0;
             for (int i = 0; i < filterCount; i++)
             {
                 int handle = ReadFilterHandle(filters, i);
-                if (_filters.TryGetValue(handle, out var e)) pad += e.PadPx;
+                if (!_filters.TryGetValue(handle, out var e)) continue;
+                if (skipBlur && e.IsBlur) continue;   // 伪模糊不执行，无需外扩
+                pad += e.PadPx;
             }
             return pad;
         }
@@ -459,6 +481,7 @@ namespace CuRmlGUI.Render
             SKImageFilter filter = null;
             SKColorFilter colorFilter = null;
             int pad = 0;
+            bool isBlur = false;
 
             switch (name)
             {
@@ -467,6 +490,7 @@ namespace CuRmlGUI.Render
                     {
                         filter = SKImageFilter.CreateBlur(p.Sigma, p.Sigma, null, null);
                         pad = (int)Math.Ceiling(p.Sigma * 3);
+                        isBlur = true;
                     }
                     break;
 
@@ -510,6 +534,7 @@ namespace CuRmlGUI.Render
                 ImageFilter = filter,
                 ColorFilter = colorFilter,
                 PadPx = pad,
+                IsBlur = isBlur,
             };
             return handle;
         }
@@ -666,7 +691,8 @@ namespace CuRmlGUI.Render
         }
 
         /// <summary>按顺序应用滤镜（每次一个，经临时 surface）。返回结果图像（可能=source）。</summary>
-        private SKImage ApplyFilters(SKImage source, IntPtr filters, int filterCount)
+        /// <param name="skipBlur">伪模糊模式：跳过高斯模糊（观感由低分辨率 backdrop 放大提供）。</param>
+        private SKImage ApplyFilters(SKImage source, IntPtr filters, int filterCount, bool skipBlur = false)
         {
             if (filterCount <= 0) return source;
             SKImage current = source;
@@ -675,6 +701,7 @@ namespace CuRmlGUI.Render
             {
                 int handle = ReadFilterHandle(filters, i);
                 if (!_filters.TryGetValue(handle, out var entry)) continue;
+                if (skipBlur && entry.IsBlur) continue;
 
                 var temp = AcquireSurface(current.Width, current.Height);
                 using (var paint = new SKPaint())

@@ -35,6 +35,7 @@
     <Compile Include="..\..\src\Native\NativeMethods.cs" Link="NativeMethods.cs" />
     <Compile Include="..\..\src\Native\Utf8.cs" Link="Utf8.cs" />
     <Compile Include="..\..\src\Render\SkiaCompositor.cs" Link="SkiaCompositor.cs" />
+    <Compile Include="..\..\src\Render\BackdropBlurMode.cs" Link="BackdropBlurMode.cs" />
   </ItemGroup>
 
   <ItemGroup>

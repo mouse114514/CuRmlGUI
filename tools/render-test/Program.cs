@@ -142,7 +142,9 @@ namespace CuRmlGUI.RenderTest
             }
 
             // backdrop-filter（磨砂玻璃）全链路：独立上下文 + 注入 backdrop。
-            BackdropTest.Run(flip);
+            // 真实高斯 / 伪模糊（低采样放大、blur 被跳过）三个子场景。
+            s_failures += BackdropTest.Run(flip);
+            s_failures += BackdropTest.RunFake(flip);
 
             NativeMethods.wg_context_destroy(s_ctx);
             s_compositor.Dispose();

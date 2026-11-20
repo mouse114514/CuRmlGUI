@@ -23,6 +23,8 @@ IMGUI 或 uGUI 呈现。**只做渲染，绝不执行 JavaScript。**
   `WebGuiView` 自行维护；无输入、无动画、无 backdrop 更新时**不重绘也不上传纹理**。
 - **毛玻璃（`backdrop-filter`）**：CSS `backdrop-filter: blur(Npx)` 对注入的游戏画面
   做模糊，且模糊只作用于元素区域（+3σ 上下文），成本 O(元素) 而非 O(视口)。
+  两种实现可选：**Real**（Skia 高斯，观感真实）/ **Fake**（超低采样 + 双线性放大，
+  成本≈0，观感更"假"）。
 - **中文开箱即用**：随插件发行 `Liberation Sans`（Latin）与 Unifont CJK 子集
   回退字体，字形按需回退，无需用户安装字体。
 
@@ -84,6 +86,62 @@ view.ClearBackdrop();              // 不需要时清除
 - 无 scissor、或滤镜链含 `mask`（需全图对齐）时退回全视口路径。
 - 抓屏建议节流 + 降采样（spike 用 15 fps、1/4 分辨率）。
 
+### backdrop 从哪来：必须抓最终 framebuffer
+
+游戏的画面分两层：**世界**（相机渲染）与**游戏自己的 UI**（`ScreenSpace-Overlay` Canvas，
+在**所有相机之后**才绘制进 framebuffer）。毛玻璃要模糊的是"你看到的那一层"，所以两
+层都得在。
+
+因此抓屏用 `ScreenCapture.CaptureScreenshotAsTexture()` 拿最终 framebuffer，而不是
+"复制一台相机渲染到 RT"——后者只能拿到世界层，玻璃后面会是黑屏（游戏 UI 全丢）。
+
+代价是抓到的画面里也有**我们自己画的 UI**（IMGUI / Overlay Canvas）。若不排除，玻璃
+面板会把**自己的上一帧**当作模糊源 → 自我模糊反馈：颜色不断向外扩散、越来越不透明、
+与真实背景脱节。
+
+**排除自己的做法是 alpha 蒙版剔除，不是隐藏帧。**按自己 UI 的 alpha 蒙版找出被覆盖
+的像素，用最近的干净像素（BFS 由外向内扩散）填充，填充接缝随后被模糊抹平。
+
+```
+ExcludeOwnUi(backdrop, dw, dh)：
+  1. 一次性 memcpy 自己的 UI 位图（Marshal.Copy，避免逐像素指针读）
+  2. 按 alpha > 8 建蒙版；位图行序可能是 top-down 或 bottom-up，两种都判定取并集
+     （宁可多剔除镜像区，也不能漏掉自己的 UI）
+  3. 与干净像素相邻的被覆盖像素播种 → BFS 向内扩散 → 回填最近的干净像素
+```
+
+**为什么不用"隐藏几帧再抓"**：隐藏帧会直接呈现在屏幕上。按 15 fps 抓屏计算要隐藏
+20%+ 的画面帧，表现为整个 UI 持续闪烁，且低帧率下无法保证两次隐藏之间的可见间隙。
+蒙版剔除不隐藏任何帧，代价只在 CPU 上（一次 memcpy + BFS），已用逐帧采样验证 UI
+区域 259/259 帧完全稳定、0 帧异常。
+
+### 两种模糊模式：Real / Fake
+
+```csharp
+view.BackdropBlurMode = BackdropBlurMode.Real;   // 默认：Skia 高斯模糊
+view.BackdropBlurMode = BackdropBlurMode.Fake;   // 伪模糊：不执行任何模糊算法
+```
+
+| | Real | Fake |
+| --- | --- | --- |
+| 算法 | Skia `CreateBlur`（IIR 高斯） | **无**，靠纹理放大 |
+| 模糊来自 | 卷积核 | 超低采样率 backdrop 被双线性放大 |
+| 过渡曲线 | 高斯平滑衰减 | 线性、宽度≈降采样除数，有轻微阶梯感 |
+| 成本 | 随元素面积增长（500×450 ≈1.7 ms） | ≈0（只多一次低分辨率采样） |
+| 还原 CSS 观感 | 是 | 否（更糊、更"假"） |
+
+**Fake 的原理与调参**：把抓屏降采样除数调大（`Spike.FakeBlurScale`，默认 16），
+合成时把这 120×67 的图直接拉伸铺满元素区域，双线性插值天然产生柔和过渡。
+**等效模糊半径 ≈ 降采样除数（像素）**，所以 `FakeBlurScale` 同时就是"模糊强度"旋钮。
+它不是高斯模糊：过渡是线性的，且缺少高频衰减，边缘纹理会有 16px 尺度的阶梯感。
+
+> 双线性放大发生在 Skia 合成时（`FilterQuality.Low`）。之所以不"交给 Unity 拉伸"，
+> 是因为 backdrop 必须先与半透明面板背景混合、再与整张 UI 一起上传成一个纹理；
+> 单独让 Unity 拉伸会破坏这层合成。采样数学与 Unity 的双线性完全相同。
+
+Fake 只影响 **backdrop 链**（source = 基座图层）上的 `blur()`；普通
+`filter: blur()`（source 是元素自己的离屏图层）仍走真实模糊。
+
 ## Spike overlay 配置
 
 开发用 spike 覆盖层（默认关闭）用于联调全链路，配置文件
@@ -98,9 +156,19 @@ view.ClearBackdrop();              // 不需要时清除
 | `DpiScale` | `1` | dp→px 比例 |
 | `SortingOrder` | `30000` | uGUI Canvas 层序 |
 | `Backdrop` | `false` | 抓屏注入 backdrop（毛玻璃模糊源） |
+| `BackdropBlur` | `Real` | `Real` 高斯 / `Fake` 伪模糊（低采样放大） |
+| `FakeBlurScale` | `16` | Fake 模式的抓屏降采样除数（≈等效模糊半径，越大越糊越省） |
 
 启用毛玻璃演示：`Enabled = true`、`AutoShow = true`、`Backdrop = true`，
 玻璃面板 `#glass` 会显示背后游戏画面的模糊效果。
+
+实测（1920×1080，15 fps 抓屏、按需渲染、ScreenCapture 抓最终 framebuffer、
+alpha 蒙版剔除自己 UI）：
+
+| 模式 | 抓屏 | 渲染（均摊） | 真正重绘 |
+| --- | --- | --- | --- |
+| Real（固定 1/4 抓屏） | 1.6 ms/帧 | 2.9 ms/帧 | 84–86 / 272–276（≈31%） |
+| Fake（FakeBlurScale=16） | 1.1 ms/帧 | 1.65 ms/帧 | 84–85 / 313–315（≈27%） |
 
 ## 架构
 
@@ -186,6 +254,7 @@ cd tools\render-test\bin\Release\net472
 | `SetBackdrop(rgba, srcW, srcH, destX, destY, destW, destH)` | 注入 backdrop（`backdrop-filter` 的模糊源，不进最终输出） |
 | `ClearBackdrop()` | 清除 backdrop |
 | `HasBackdrop` | 是否有 backdrop 注入 |
+| `BackdropBlurMode` | `Real`（Skia 高斯）/ `Fake`（伪模糊：低采样放大，成本≈0） |
 | `Texture` / `Width` / `Height` | 结果纹理（RGBA32）与尺寸 |
 | `ElementEvent` | 事件：(eventType, elementId)，如 `click`/`mouseover`/`change` |
 | `MouseMove/Down/Up/Wheel` | 鼠标输入（左上原点逻辑像素） |
@@ -210,8 +279,8 @@ RmlUi 6.3 的 `Context::Update()` / `Render()` **无条件返回 `true`**，不�
 坐标去重，避免调用方每帧转发导致每帧重绘。
 
 实测效果（1920×1080，毛玻璃开启）：重绘帧数从 **195/195（100%）** 降到
-**84/275（≈31%，等于 15 fps 抓屏节流的比例）**，渲染均摊耗时
-10.5 ms/帧 → 3.0 ms/帧。
+**84–86 / 272–276（≈31%，即 15 fps 抓屏节流 + 2 帧 linger 的比例）**，渲染均摊耗时
+10.5 ms/帧 → 2.8–3.0 ms/帧。
 
 ## 关键约束（设计决策）
 

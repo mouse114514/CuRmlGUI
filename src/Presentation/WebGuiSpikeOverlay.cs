@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using BepInEx.Logging;
 using CuRmlGUI.Native;
+using CuRmlGUI.Render;
 using UnityEngine;
 
 namespace CuRmlGUI.Presentation
@@ -33,8 +34,12 @@ namespace CuRmlGUI.Presentation
         private bool _backdropCapture;
         private float _nextCapture;
         private const float CaptureInterval = 1f / 15f;   // 15fps 节流
-        private const int BackdropScale = 4;              // 降采样 1/4
+        private const int BackdropScale = 4;              // Real 模式降采样 1/4
         private bool _backdropFlipV = true;               // 截图行序是否为 bottom-up（需翻转）
+
+        // 模糊实现方式：Real=Skia 高斯；Fake=超低采样+双线性放大。
+        private BackdropBlurMode _blurMode = BackdropBlurMode.Real;
+        private int _fakeBlurScale = 16;
 
         private WebGuiView _view;
         private UguiPresenter _ugui;
@@ -54,7 +59,9 @@ namespace CuRmlGUI.Presentation
         // 需要转发「按下/抬起」的特殊键（字母/数字也转发，便于 Ctrl+A/C/V 等快捷键）。
         private static readonly KeyCode[] Keys = BuildKeyList();
 
-        public void Init(KeyCode toggleKey, PresentationMode mode, float dpiScale, ManualLogSource log, bool autoShow = false, bool backdrop = false)
+        public void Init(KeyCode toggleKey, PresentationMode mode, float dpiScale, ManualLogSource log,
+            bool autoShow = false, bool backdrop = false,
+            BackdropBlurMode blurMode = BackdropBlurMode.Real, int fakeBlurScale = 16)
         {
             _toggleKey = toggleKey;
             _mode = mode;
@@ -62,7 +69,12 @@ namespace CuRmlGUI.Presentation
             _log = log;
             _autoShow = autoShow;
             _backdropCapture = backdrop;
+            _blurMode = blurMode;
+            _fakeBlurScale = fakeBlurScale < 1 ? 1 : fakeBlurScale;
         }
+
+        /// <summary>抓屏降采样除数：Real 固定 1/4（模糊源够清晰即可），Fake 用配置的大除数。</summary>
+        private int CaptureDivisor => _blurMode == BackdropBlurMode.Fake ? _fakeBlurScale : BackdropScale;
 
         private void Update()
         {
@@ -166,6 +178,7 @@ namespace CuRmlGUI.Presentation
             int h = Mathf.Max(1, Screen.height);
 
             _view = new WebGuiView(w, h, _dpiScale);
+            _view.BackdropBlurMode = _blurMode;
             _lastW = w;
             _lastH = h;
 
@@ -293,9 +306,27 @@ namespace CuRmlGUI.Presentation
 
         // ------------------------------------------------------------------ backdrop 捕获（真·毛玻璃）
 
+        // 抓屏方式：ScreenCapture 抓最终 framebuffer（世界 + 游戏自己的 ScreenSpaceOverlay UI），
+        // 这层 UI 在所有相机之后才绘制，任何「复制相机渲染到 RT」的做法都拿不到它。
+        //
+        // 抓到的画面里也包含**我们自己画的 UI**。若直接注入，玻璃面板会把「自己的上一帧」当作
+        // 模糊源 → 自我模糊反馈（颜色外溢、越来越不透明、与真实背景脱节）。
+        //
+        // 处理：按自己 UI 的 alpha 蒙版把这些像素剔除，用最近的干净像素填充（见
+        // <see cref="ExcludeOwnUi"/>）。填充的接缝随后被模糊抹平，肉眼不可见。
+        //
+        // 为什么不改成「隐藏自己几帧再抓」：那样隐藏帧会直接呈现在屏幕上，按 15fps 抓屏
+        // 计算要隐藏掉 20%+ 的画面帧，表现为整个 UI 持续闪烁，且低帧率下无法保证间隙。
+        // 蒙版剔除不隐藏任何帧，代价只在 CPU 上（一次 BFS + 内存拷贝）。
+        private byte[] _backdropRgba;
+        private byte[] _uiRgba;           // 自己 UI 位图的一次性拷贝（避免逐像素指针读）
+        private int[] _fillSrc;           // 0=干净；1=待填充；src+1=由 src 填充
+        private readonly Queue<int> _fillQueue = new Queue<int>();
+
         /// <summary>
-        /// 节流抓取游戏画面（全屏，降采样 1/4），注入 view 作为 backdrop 模糊源。
-        /// 第一版用同步 ScreenCapture（节流+降采样控制成本）；卡顿再升级 AsyncGPUReadback。
+        /// 节流抓取画面（世界 + 游戏 UI），注入 view 作为 backdrop 模糊源。
+        /// Real 模式降采样 1/4；Fake 模式用 <see cref="CaptureDivisor"/>（默认 1/16）——
+        /// 极低采样率 + 放大 = 伪模糊。
         /// </summary>
         private void CaptureBackdrop()
         {
@@ -305,23 +336,25 @@ namespace CuRmlGUI.Presentation
             try
             {
                 shot = ScreenCapture.CaptureScreenshotAsTexture();
-                if (shot == null) return;
+                if (shot == null || shot.width <= 0 || shot.height <= 0) return;
 
-                int sw = shot.width, sh = shot.height;
-                if (sw <= 0 || sh <= 0) return;
+                int divisor = CaptureDivisor;
+                int dw = Mathf.Max(1, shot.width / divisor);
+                int dh = Mathf.Max(1, shot.height / divisor);
 
-                int dw = Mathf.Max(1, sw / BackdropScale);
-                int dh = Mathf.Max(1, sh / BackdropScale);
-
-                // 降采样：每 BackdropScale×BackdropScale 块取 1 像素。
-                var rgba = Downsample(shot, sw, sh, dw, dh);
-                if (rgba == null) return;
+                int stride = dw * dh * 4;
+                if (_backdropRgba == null || _backdropRgba.Length != stride)
+                    _backdropRgba = new byte[stride];
+                Downsample(shot, shot.width, shot.height, dw, dh, divisor, _backdropRgba);
+                byte[] rgba = _backdropRgba;
 
                 // GetPixels32 行序为 bottom-up（第 0 行=屏幕底部）；SetBackdrop 契约为 top-down。
-                // 已用离屏转储验证：翻转后 spike 窗口在左上、文字正立，方向正确。
                 if (_backdropFlipV) FlipRowsV(rgba, dw, dh);
 
-                // 目标区域铺满整个视口（源是 1/4 降采样，需拉伸）；否则 backdrop 只覆盖左上角，
+                // 抓到的画面含我们自己的 UI，必须先剔除，否则玻璃会模糊到自己。
+                ExcludeOwnUi(rgba, dw, dh);
+
+                // 目标区域铺满整个视口（源是降采样图，需拉伸）；否则 backdrop 只覆盖左上角，
                 // 玻璃若位于视口右侧则模糊源为空。
                 _view.SetBackdrop(rgba, dw, dh, 0, 0, Screen.width, Screen.height);
                 _nextCapture = Time.time + CaptureInterval;
@@ -338,27 +371,143 @@ namespace CuRmlGUI.Presentation
         }
 
         /// <summary>
-        /// 降采样到 dw×dh：每 BackdropScale×BackdropScale 块取 1 像素（CPU 抽点）。
+        /// 从 backdrop 里剔除「我们自己的 UI」：按其 alpha 蒙版找出被覆盖的像素，
+        /// 用最近的干净像素（BFS 由外向内扩散）填充。
+        ///
+        /// 玻璃若直接模糊这些像素，会把上一帧的自己当模糊源 → 自我反馈。
+        /// 填充留下的接缝宽度约 1 个降采样块，被 σ=14 的模糊完全抹平。
+        /// </summary>
+        private int ExcludeOwnUi(byte[] rgba, int dw, int dh)
+        {
+            IntPtr px = _view.Pixels;
+            if (px == IntPtr.Zero) return 0;
+
+            int W = _view.Width, H = _view.Height;
+            if (W <= 0 || H <= 0) return 0;
+
+            int size = W * H * 4;
+            if (_uiRgba == null || _uiRgba.Length != size)
+                _uiRgba = new byte[size];
+
+            // 一次性 memcpy 整个 UI 位图，避免逐像素 IntPtr 读（慢一个数量级）。
+            System.Runtime.InteropServices.Marshal.Copy(px, _uiRgba, 0, size);
+
+            int n = dw * dh;
+            if (_fillSrc == null || _fillSrc.Length != n)
+            {
+                _fillSrc = new int[n];
+                _fillQueue.Clear();
+            }
+            Array.Clear(_fillSrc, 0, n);
+            _fillQueue.Clear();
+
+            // 蒙版：自己 UI 有 alpha 的像素。
+            // 位图行序可能是 top-down 或 bottom-up（取决于合成器的 flip 约定），
+            // 这里两种都判定并取并集：宁可多剔除一片（镜像位置），也不能漏掉自己的 UI
+            // ——漏掉就会形成自我模糊反馈。多剔除的区域经模糊后与周围背景无异。
+            for (int y = 0; y < dh; y++)
+            {
+                int sy = Mathf.Min(H - 1, y * H / dh);
+                int r0 = sy * W * 4;
+                int r1 = (H - 1 - sy) * W * 4;
+                for (int x = 0; x < dw; x++)
+                {
+                    int sx = Mathf.Min(W - 1, x * W / dw);
+                    if (_uiRgba[r0 + sx * 4 + 3] > 8 || _uiRgba[r1 + sx * 4 + 3] > 8)
+                        _fillSrc[y * dw + x] = 1;
+                }
+            }
+
+            // 播种：与干净像素相邻的被覆盖像素，其填充源就是那个邻居。
+            for (int i = 0; i < n; i++)
+            {
+                if (_fillSrc[i] != 1) continue;
+                int src = NeighborClean(i, dw, dh);
+                if (src >= 0)
+                {
+                    _fillSrc[i] = src + 1;
+                    _fillQueue.Enqueue(i);
+                }
+            }
+
+            // 向内扩散：每个待填充像素继承其已填充邻居的源。
+            while (_fillQueue.Count > 0)
+            {
+                int i = _fillQueue.Dequeue();
+                int v = _fillSrc[i];
+                for (int d = 0; d < 4; d++)
+                {
+                    int j = Neighbor(i, d, dw, dh);
+                    if (j < 0) continue;
+                    if (_fillSrc[j] == 1)
+                    {
+                        _fillSrc[j] = v;
+                        _fillQueue.Enqueue(j);
+                    }
+                }
+            }
+
+            // 回填像素。
+            int masked = 0;
+            for (int i = 0; i < n; i++)
+            {
+                int v = _fillSrc[i];
+                if (v > 1)
+                {
+                    int s = (v - 1) * 4, t = i * 4;
+                    rgba[t] = rgba[s]; rgba[t + 1] = rgba[s + 1];
+                    rgba[t + 2] = rgba[s + 2]; rgba[t + 3] = rgba[s + 3];
+                    masked++;
+                }
+                else if (v == 1) masked++;   // 孤岛：无干净邻居，保持原样
+            }
+            return masked;
+        }
+
+        /// <summary>四邻域中最近的干净像素（_fillSrc==0）；无则返回 -1。</summary>
+        private int NeighborClean(int i, int dw, int dh)
+        {
+            for (int d = 0; d < 4; d++)
+            {
+                int j = Neighbor(i, d, dw, dh);
+                if (j >= 0 && _fillSrc[j] == 0) return j;
+            }
+            return -1;
+        }
+
+        /// <summary>四邻域索引；越界返回 -1。</summary>
+        private static int Neighbor(int i, int d, int dw, int dh)
+        {
+            int x = i % dw, y = i / dw;
+            switch (d)
+            {
+                case 0: return x > 0 ? i - 1 : -1;
+                case 1: return x < dw - 1 ? i + 1 : -1;
+                case 2: return y > 0 ? i - dw : -1;
+                default: return y < dh - 1 ? i + dw : -1;
+            }
+        }
+
+        /// <summary>
+        /// 降采样到 dw×dh：每 divisor×divisor 块取 1 像素（CPU 抽点）。
         ///
         /// 不用 <c>Texture2D.Resize</c> 做 GPU 缩放：该 API 在当前 Unity 版本是「重新初始化纹理」
         /// （尺寸变对但像素清空），会造成黑背底。
         /// </summary>
-        private static byte[] Downsample(Texture2D shot, int sw, int sh, int dw, int dh)
+        private static void Downsample(Texture2D shot, int sw, int sh, int dw, int dh, int divisor, byte[] rgba)
         {
             var src = shot.GetPixels32();
-            var rgba = new byte[dw * dh * 4];
             for (int dy = 0; dy < dh; dy++)
             {
-                int sy = Mathf.Min(sh - 1, dy * BackdropScale);
+                int sy = Mathf.Min(sh - 1, dy * divisor);
                 for (int dx = 0; dx < dw; dx++)
                 {
-                    int sx = Mathf.Min(sw - 1, dx * BackdropScale);
+                    int sx = Mathf.Min(sw - 1, dx * divisor);
                     Color32 c = src[sy * sw + sx];
                     int o = (dy * dw + dx) * 4;
-                    rgba[o] = c.r; rgba[o + 1] = c.g; rgba[o + 2] = c.b; rgba[o + 3] = c.a;
+                    rgba[o] = c.r; rgba[o + 1] = c.g; rgba[o + 2] = c.b; rgba[o + 3] = 255;
                 }
             }
-            return rgba;
         }
 
         /// <summary>行翻转（bottom-up → top-down）。</summary>
@@ -401,6 +550,8 @@ namespace CuRmlGUI.Presentation
             _ugui = null;
             _view?.Dispose();
             _view = null;
+
+            _backdropRgba = null;
         }
 
         // ------------------------------------------------------------------ spike 文档
