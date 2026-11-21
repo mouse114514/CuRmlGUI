@@ -583,7 +583,7 @@ select {
   border-radius: 5px;
 }
 
-input[type=range] { width: 160px; height: 20px; }
+input[type=range] { width: 160px; }
 #clicks { margin-left: 4px; color: #9ad0ff; }
 
 /* ============ 卡片网格 ============ */

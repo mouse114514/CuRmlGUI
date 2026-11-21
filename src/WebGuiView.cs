@@ -145,30 +145,33 @@ input[type=checkbox]:checked, input[type=radio]:checked {
     background: #6ea8ff;
     border-color: #6ea8ff;
 }
+input[type=range] {
+    height: 32px;
+    vertical-align: -12px;
+}
 input[type=range] slidertrack {
-    display: block;
-    height: 6px;
-    margin-top: 7px;
+    margin-top: 3px;
+    height: 22px;
     background: #2a3150;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 input[type=range] sliderprogress {
-    display: block;
-    height: 6px;
+    margin-top: 8px;
+    height: 7px;
     background: #6ea8ff;
     border-radius: 3px;
 }
 input[type=range] sliderbar {
-    display: block;
-    width: 16px;
-    height: 16px;
-    margin-top: 2px;
+    margin-left: -8px;
+    margin-right: -7px;
+    margin-top: -3px;
+    width: 22px;
+    height: 23px;
     background: #ffffff;
-    border-radius: 8px;
+    border-radius: 11px;
 }
 input[type=range] sliderarrowdec,
 input[type=range] sliderarrowinc {
-    display: block;
     width: 0px;
     height: 0px;
 }
