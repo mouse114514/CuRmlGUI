@@ -46,15 +46,16 @@ namespace CuRmlGUI.RenderTest
             int failures = 0;
             Console.WriteLine($"\n=== ControlsTest (flip={flip}) ===");
 
-            // —— CSS 文本断言：验证控件是纯光影（无颜色/填充/边框/渐变）。 ——
-            failures += CheckContains(Css, "inset 0 2px 2px", "顶部高光 inset(亮)");
-            failures += CheckContains(Css, "inset 0 -3px 4px", "底部环境光反光 inset(亮)");
-            failures += CheckContains(Css, "0 3px 8px", "checkbox 外阴影(暗)");
-            failures += CheckContains(Css, "0 4px 10px", "圆钮外阴影(暗)");
-            failures += CheckContains(Css, "background-color: rgba(0,0,0,0.22)", "关闭态内部变暗");
-            failures += CheckContains(Css, "background-color: transparent", "开启态透明");
+            // —— CSS 文本断言：验证控件以「外阴影 + 内阴影」塑形，无底部白色反光、无彩色、无渐变。 ——
+            failures += CheckContains(Css, "inset 0 1px 1px rgba(255,255,255,0.18)", "顶部淡高光");
+            failures += CheckContains(Css, "inset 0 -1px 2px rgba(0,0,0,0.30)", "底部内暗（厚度/内阴影）");
+            failures += CheckContains(Css, "0 3px 6px", "外阴影（浮起）");
+            failures += CheckContains(Css, "inset 0 2px 5px rgba(0,0,0,0.62)", "按下凹陷（内阴影）");
+            failures += CheckContains(Css, "background-color: rgba(0,0,0,0.25)", "关闭态内部变暗");
+            failures += CheckContains(Css, "background-color: transparent", "轨道透明");
             failures += CheckNotContains(Css, "#0A84FF", "无 iOS 蓝彩色");
-            failures += CheckNotContains(Css, "decorator:", "无渐变（纯光影）");
+            failures += CheckNotContains(Css, "decorator:", "无渐变");
+            failures += CheckNotContains(Css, "inset 0 -3px 4px rgba(255,255,255", "无底部白色反光（避免虚假）");
 
             // —— 渲染一次，输出 PNG 供人工查看（渲染不稳定，不作为断言依据）。 ——
             try
@@ -199,42 +200,42 @@ input[type=range] slidertrack { height: 2px; margin-top: 8px; background: rgba(2
 input[type=range] sliderprogress { height: 2px; margin-top: 0px; background: #6ea8ff; border-radius: 1px; }
 input[type=range] sliderbar { width: 16px; height: 16px; margin-top: 1px; margin-left: -8px; margin-right: -8px; border-radius: 8px; background: #ffffff; }
 
-/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：只做光影，无颜色/填充/边框）—— */
+/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：外阴影+内阴影塑形，无底部白色反光）—— */
 input[type=checkbox] {
   width: 20px; height: 20px; border-width: 0; border-radius: 6px;
-  background-color: rgba(0,0,0,0.22);
-  box-shadow: inset 0 2px 2px rgba(255,255,255,0.55),
-              inset 0 -3px 4px rgba(255,255,255,0.70),
-              0 3px 8px rgba(0,0,0,0.50);
+  background-color: rgba(0,0,0,0.25);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.18),
+              inset 0 -1px 2px rgba(0,0,0,0.30),
+              0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=checkbox]:checked {
-  background-color: transparent;
-  box-shadow: inset 0 2px 2px rgba(255,255,255,0.85),
-              inset 0 -3px 4px rgba(255,255,255,0.80),
-              0 3px 8px rgba(0,0,0,0.52);
+  background-color: rgba(255,255,255,0.08);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.24),
+              inset 0 -1px 2px rgba(0,0,0,0.22),
+              0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=checkbox]:active, input[type=checkbox]:checked:active {
-  background-color: rgba(0,0,0,0.40);
-  box-shadow: inset 0 2px 5px rgba(0,0,0,0.62), inset 0 -2px 3px rgba(255,255,255,0.16);
+  background-color: rgba(0,0,0,0.42);
+  box-shadow: inset 0 2px 5px rgba(0,0,0,0.62), inset 0 -1px 2px rgba(0,0,0,0.30);
 }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px; border-width: 0; background-color: transparent; border-radius: 2px;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(255,255,255,0.50);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(0,0,0,0.22);
 }
 input[type=range] sliderprogress {
-  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.22);
-  border-radius: 2px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
+  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.18);
+  border-radius: 2px; box-shadow: inset 0 1px 1px rgba(255,255,255,0.25);
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
-  border-radius: 9px; background-color: rgba(255,255,255,0.22);
-  box-shadow: inset 0 2px 2px rgba(255,255,255,0.75),
-              inset 0 -3px 4px rgba(255,255,255,0.70),
-              0 4px 10px rgba(0,0,0,0.55);
+  border-radius: 9px; background-color: rgba(255,255,255,0.15);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.30),
+              inset 0 -1px 2px rgba(0,0,0,0.20),
+              0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=range] sliderbar:active {
-  background-color: rgba(255,255,255,0.10);
-  box-shadow: inset 0 2px 5px rgba(0,0,0,0.55), inset 0 -2px 3px rgba(255,255,255,0.16);
+  background-color: rgba(0,0,0,0.10);
+  box-shadow: inset 0 2px 5px rgba(0,0,0,0.55), inset 0 -1px 2px rgba(0,0,0,0.22);
 }
 input[type=range] sliderarrowdec, input[type=range] sliderarrowinc { display: none; }
 ";
