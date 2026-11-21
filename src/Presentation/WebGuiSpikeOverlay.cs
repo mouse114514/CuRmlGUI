@@ -98,7 +98,17 @@ namespace CuRmlGUI.Presentation
                 EnsureSize();
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                if (_backdropCapture)
+                // backdrop 抓屏只在 ImGui 模式可用：抓屏发生在 OnGUI（我们绘制之前），
+                // 而 UGui 模式不走 OnGUI。非 ImGui 时显式禁用并提示一次，避免静默无效。
+                bool backdropActive = _backdropCapture && _mode == PresentationMode.ImGui;
+                if (_backdropCapture && !backdropActive && !_backdropWarned)
+                {
+                    _backdropWarned = true;
+                    _log?.LogWarning(
+                        "[CuRmlGUI] backdrop 仅在 ImGui 呈现模式下可用，当前为 " + _mode +
+                        "，已跳过毛玻璃抓屏（玻璃将无模糊源）。");
+                }
+                if (backdropActive)
                 {
                     ReadBackdrop();
                     RequestBackdropCapture();
@@ -109,7 +119,7 @@ namespace CuRmlGUI.Presentation
                 sw2.Stop();
                 if (updated) _renderFrames++;
 
-                if (_backdropCapture)
+                if (backdropActive)
                 {
                     _costAccumMs += sw.Elapsed.TotalMilliseconds;
                     _renderAccumMs += sw2.Elapsed.TotalMilliseconds;
@@ -175,6 +185,12 @@ namespace CuRmlGUI.Presentation
         {
             _visible = visible;
             if (_ugui != null) _ugui.SetVisible(visible);
+            if (!visible)
+            {
+                // 隐藏时丢弃未消费的抓屏，避免再次显示时套用旧帧。
+                if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
+                _grabRequested = false;
+            }
             _log?.LogInfo("[CuRmlGUI] Spike overlay " + (visible ? "shown" : "hidden"));
         }
 
@@ -329,6 +345,7 @@ namespace CuRmlGUI.Presentation
         private Texture2D _pendingShot;   // 已抓屏、待读回像素
         private bool _grabRequested;       // 已排队，等 OnGUI 抓
         private float _nextCapture;
+        private bool _backdropWarned;      // 已提示「非 ImGui 模式不支持抓屏」
 
         /// <summary>OnGUI Repaint 阶段抓取最终屏幕（不含我们的 IMGUI），留待下一帧读回。</summary>
         private void GrabBackdrop()
@@ -373,20 +390,45 @@ namespace CuRmlGUI.Presentation
                 if (_backdropRgba == null || _backdropRgba.Length != n)
                     _backdropRgba = new byte[n];
 
-                // GetPixels32 行序为 bottom-up（第 0 行 = 屏幕底部）。
-                var px = shot.GetPixels32();
-                for (int y = 0; y < dh; y++)
+                // 直接读原始字节：GetRawTextureData 是 NativeArray 视图，不产生 8MB 托管数组
+                // （GetPixels32 每次会分配 sw*sh 个 Color32）。RGB24 为 3 字节/像素，RGBA32
+                // 为 4 字节；按 raw.Length/(sw*sh) 推断。行序为 bottom-up（第 0 行 = 屏幕底部）。
+                var raw = shot.GetRawTextureData<byte>();
+                int bpp = raw.Length / (sw * sh);
+                if (bpp == 3 || bpp == 4)
                 {
-                    int srcRow = (y * sh / dh) * sw;
-                    int dstRow = y * dw;
-                    for (int x = 0; x < dw; x++)
+                    for (int y = 0; y < dh; y++)
                     {
-                        var c = px[srcRow + x * sw / dw];
-                        int o = (dstRow + x) * 4;
-                        _backdropRgba[o] = c.r;
-                        _backdropRgba[o + 1] = c.g;
-                        _backdropRgba[o + 2] = c.b;
-                        _backdropRgba[o + 3] = c.a;
+                        int srcRow = (y * sh / dh) * sw;
+                        int dstRow = y * dw;
+                        for (int x = 0; x < dw; x++)
+                        {
+                            int si = (srcRow + x * sw / dw) * bpp;
+                            int o = (dstRow + x) * 4;
+                            _backdropRgba[o] = raw[si];
+                            _backdropRgba[o + 1] = raw[si + 1];
+                            _backdropRgba[o + 2] = raw[si + 2];
+                            _backdropRgba[o + 3] = bpp >= 4 ? raw[si + 3] : (byte)255;
+                        }
+                    }
+                }
+                else
+                {
+                    // 兜底：非常见格式（压缩等）退回 GetPixels32，保证可用性。
+                    var px = shot.GetPixels32();
+                    for (int y = 0; y < dh; y++)
+                    {
+                        int srcRow = (y * sh / dh) * sw;
+                        int dstRow = y * dw;
+                        for (int x = 0; x < dw; x++)
+                        {
+                            var c = px[srcRow + x * sw / dw];
+                            int o = (dstRow + x) * 4;
+                            _backdropRgba[o] = c.r;
+                            _backdropRgba[o + 1] = c.g;
+                            _backdropRgba[o + 2] = c.b;
+                            _backdropRgba[o + 3] = c.a;
+                        }
                     }
                 }
 

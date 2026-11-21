@@ -32,10 +32,18 @@ namespace CuRmlGUI
         private int _renderLinger;
 
         // 动画驱动的重绘限速：连续动画（旋转/脉冲/波形）会让 wg_update_delay 恒为 0，
-        // 若每帧都全量重绘（Skia 合成 + 8MB 纹理上传），会明显拖低帧率。限到 ~30fps，
-        // 既保持动画流畅，又把重绘成本减半；backdrop 的 15fps 更新不受此限速影响。
-        private const float MinAnimRenderInterval = 1f / 30f;
+        // 若每帧都全量重绘（Skia 合成 + 8MB 纹理上传），会明显拖低帧率。默认限到 ~30fps，
+        // 既保持动画流畅，又把重绘成本减半；输入/文档/backdrop 触发的立即重绘不受此限速
+        // 影响。消费方可通过 <see cref="AnimationRenderInterval"/> 调整（设为 0 表示不限速，
+        // 即恢复「每帧重绘」的旧行为）。
         private float _lastRenderTime = -1f;
+
+        /// <summary>
+        /// 连续动画驱动的最小重绘间隔（秒）。默认 <c>1/30</c>（约 30fps）。
+        /// 设为 0 或负值表示不限速（每帧重绘，CPU 占用更高）。
+        /// 仅影响「纯动画」驱动的重绘；输入、文档变更、backdrop 更新仍立即重绘。
+        /// </summary>
+        public float AnimationRenderInterval { get; set; } = 1f / 30f;
 
         // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
@@ -127,7 +135,9 @@ namespace CuRmlGUI
         /// 这些控件（或它们的子元素）没有样式时只显示标签文字。这里给出一套通用默认外观，
         /// 让控件开箱即用。其中 range 滑块由三个子元素构成：
         ///   slidertrack（槽） / sliderprogress（已填充段） / sliderbar（滑块）。
-        /// 垂直居中按输入高度 20px（track 6px → margin-top 7；thumb 16px → margin-top 2）调校。
+        /// 关键约束：这些子元素只能用 margin 定位，**不能加 display/position**——否则
+        /// SetOffset 只挪动绘制位置、命中盒仍停在流式位置，导致滑块「看得见但拖不动」。
+        /// 几何按输入高度 32px 调校（track 22px → margin-top 3；thumb 23px → margin-top -3）。
         /// </summary>
         private const string DefaultControlsCss = @"
 /* ===== CuRmlGUI 表单控件默认外观 ===== */
@@ -313,11 +323,14 @@ select selectbox option:hover {
 
             // 渲染判定：
             //  - 输入/文档/backdrop 变更 → linger（立即渲染 + 传播 2 帧）；
-            //  - 纯连续动画 → 限速到 ~30fps，避免每帧全量重绘拖垮帧率。
+            //  - 纯连续动画 → 按 AnimationRenderInterval 限速（默认 ~30fps）。
             bool render = _renderLinger > 0;
-            if (!render && NativeMethods.wg_update_delay(_ctx) <= 0.0
-                && UnityEngine.Time.unscaledTime - _lastRenderTime >= MinAnimRenderInterval)
-                render = true;
+            if (!render && NativeMethods.wg_update_delay(_ctx) <= 0.0)
+            {
+                float interval = AnimationRenderInterval;
+                if (interval <= 0f || UnityEngine.Time.unscaledTime - _lastRenderTime >= interval)
+                    render = true;
+            }
 
             if (!render) return false;
 
