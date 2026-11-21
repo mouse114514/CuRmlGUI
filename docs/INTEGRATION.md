@@ -239,6 +239,30 @@ Box shadows support `inset`, blur, spread and comma-separated lists. An outer sh
 needs a non-zero offset or spread to be visible, because RmlUi clips it to the region
 outside the border box.
 
+### 7.5 Liquid Glass theme preset
+
+`LiquidGlassTheme.Css` is a ready-made Apple "Liquid Glass" stylesheet, tuned for a
+dark, busy backdrop such as gameplay. Concatenate it into `LoadDocument`:
+
+```csharp
+view.EnableGpuGlass(new[] { "card-1" });          // cards blur the game behind them
+view.LoadDocument(rml, LiquidGlassTheme.Css + myCss);
+```
+
+It styles these selectors (same selectors as the built-in `DefaultControlsCss`, so it
+overrides the default control look when appended):
+
+| Selector | Look |
+| --- | --- |
+| `.card` | Translucent glass panel: an inset rim highlight (brightest on top), a 135° diagonal sheen, and a 24px drop shadow. Pair with GPU glass so the blurred backdrop shows through. |
+| `.lg-button` | Dark glass button: white text, 1px light border, top inner highlight, drop shadow; `:active` presses into a recess. |
+| `input[type=checkbox]` | Dark glass box; unchecked = dimmed (off), checked = brighter; `:active` recesses. |
+| `input[type=range]` | Transparent groove, brighter filled progress, and a glass thumb tinted like the progress; `:active` dims and recesses the thumb. |
+
+The preset targets **dark backdrops**. On a light background, override the tint
+(`background-color`) and text colours. It is plain CSS and works with or without GPU glass
+(GPU glass only adds the blurred backdrop behind `.card`).
+
 ## 8. Custom filters
 
 Register a filter before loading the document, because RmlUi needs the instancer

@@ -34,6 +34,7 @@
     <Compile Include="EffectsTest.cs" />
     <Compile Include="CssCompatTest.cs" />
     <Compile Include="ControlsTest.cs" />
+    <Compile Include="ThemeTest.cs" />
     <Compile Include="ReflectDump.cs" />
     <Compile Include="..\..\src\Native\NativeMethods.cs" Link="NativeMethods.cs" />
     <Compile Include="..\..\src\Native\Utf8.cs" Link="Utf8.cs" />
@@ -41,6 +42,7 @@
     <Compile Include="..\..\src\Render\CssCompat.cs" Link="CssCompat.cs" />
     <Compile Include="..\..\src\Render\CustomFilter.cs" Link="CustomFilter.cs" />
     <Compile Include="..\..\src\Render\BackdropBlurMode.cs" Link="BackdropBlurMode.cs" />
+    <Compile Include="..\..\src\LiquidGlassTheme.cs" Link="LiquidGlassTheme.cs" />
   </ItemGroup>
 
   <ItemGroup>

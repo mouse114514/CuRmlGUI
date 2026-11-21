@@ -217,6 +217,28 @@ view.CssCompatEnabled = false;   // 默认 true
 `box-shadow` 支持 `inset`、模糊、扩散与逗号分隔的多重阴影。外阴影需要有非零偏移
 或扩散才可见，因为 RmlUi 会把它裁剪到边框盒之外。
 
+### 7.5 Liquid Glass 主题预设
+
+`LiquidGlassTheme.Css` 是一套现成的 Apple「液态玻璃」样式，针对暗色、有内容的背景
+（如游戏画面）调校。直接拼进 `LoadDocument` 即可用：
+
+```csharp
+view.EnableGpuGlass(new[] { "card-1" });          // 卡片透出背后的游戏画面并模糊
+view.LoadDocument(rml, LiquidGlassTheme.Css + myCss);
+```
+
+它覆盖以下选择器（与内置 `DefaultControlsCss` 同一批选择器，因此附加后会覆盖默认控件外观）：
+
+| 选择器 | 外观 |
+| --- | --- |
+| `.card` | 半透明玻璃面板：边缘一圈内高光（顶部最亮）、135° 对角光泽、24px 外阴影。配合 GPU 玻璃可透出模糊背景。 |
+| `.lg-button` | 暗玻璃按钮：白字、1px 亮边、顶部内高光、外阴影；`:active` 按下凹陷。 |
+| `input[type=checkbox]` | 暗玻璃方块；未选中变暗（关），选中略亮；`:active` 凹陷。 |
+| `input[type=range]` | 透明凹槽 + 略亮的进度 + 与进度同色的玻璃圆钮；`:active` 圆钮变暗并凹陷。 |
+
+该预设面向**暗色背景**。若用在浅色背景，需自行覆盖 tint（`background-color`）与文字颜色。
+它是纯 CSS，有无 GPU 玻璃都能用（GPU 玻璃只是给 `.card` 加上背后的模糊）。
+
 ## 8. 自定义滤镜
 
 滤镜必须在载入文档之前注册，因为 RmlUi 在解析 CSS 时就需要对应的实例化器：

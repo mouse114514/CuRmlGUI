@@ -225,6 +225,9 @@ namespace CuRmlGUI.RenderTest
             // 表单控件观感：库默认深色主题 + iOS 覆盖后，checkbox/range 的最终像素。
             s_failures += ControlsTest.Run(flip, font, family);
 
+            // Liquid Glass 主题预设（Apple 风格）：CSS 完整性 + 示例渲染。
+            s_failures += ThemeTest.Run(flip, font, family);
+
             Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
 
             NativeMethods.wg_context_destroy(s_ctx);

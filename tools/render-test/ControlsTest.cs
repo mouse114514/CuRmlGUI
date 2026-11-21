@@ -91,9 +91,9 @@ namespace CuRmlGUI.RenderTest
             return ok ? 0 : 1;
         }
 
-        private static SKBitmap RenderCss(string rml, string css, string fontPath)
+        internal static SKBitmap RenderCss(string rml, string css, string fontPath, int w = 420, int h = 120)
         {
-            var comp = new SkiaCompositor(W, H, flipY: false);
+            var comp = new SkiaCompositor(w, h, flipY: false);
             IntPtr ctx = IntPtr.Zero;
             try
             {
@@ -137,7 +137,7 @@ namespace CuRmlGUI.RenderTest
                     comp.RenderShader((int)sh, v, vc, idx, ic, (ulong)tex, tx, ty);
                 s_releaseShader = (u, sh) => comp.ReleaseShader((int)sh);
 
-                ctx = NativeMethods.wg_context_create(W, H, 1f);
+                ctx = NativeMethods.wg_context_create(w, h, 1f);
                 if (ctx == IntPtr.Zero) throw new InvalidOperationException("wg_context_create failed");
 
                 NativeMethods.wg_set_render_callbacks(ctx, IntPtr.Zero, s_draw, s_create, s_destroy, s_gen, s_scissor);

@@ -34,6 +34,9 @@ not suitable for production use.
   `background` declarations are rewritten to their RmlUi equivalents before parsing
   (`WebGuiView.CssCompatEnabled`, default on), so browser-style markup keeps
   working. Unsafe conversions are left untouched and logged once.
+- **Liquid Glass theme preset.** `LiquidGlassTheme.Css` is a ready-made Apple
+  "Liquid Glass" stylesheet — glass panels, dark-glass buttons, checkboxes and
+  sliders — that you append to `LoadDocument` (integration guide §7.5).
 - **Render backend that follows the official RmlUi contract.** Scissor regions,
   clip masks for rounded clipping, off-screen layers, `filter` and
   `backdrop-filter`, `mask-image`, gradient shaders and 2D transforms are
