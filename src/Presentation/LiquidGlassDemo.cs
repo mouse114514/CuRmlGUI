@@ -32,13 +32,13 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        // 抓屏节流：玻璃背景 10fps 足够（每次抓屏是同步读回，成本远高于重绘）。
-        private const float CaptureInterval = 1f / 10f;
+        // 抓屏节流：玻璃背景 20fps（每次抓屏是同步读回，成本远高于重绘）。
+        private const float CaptureInterval = 1f / 20f;
         private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
-
-        // 模糊实现方式：Real=Skia 高斯；Fake=超低采样+双线性放大。
-        private BackdropBlurMode _blurMode = BackdropBlurMode.Real;
-        private int _fakeBlurScale = 16;
+        // 模糊实现方式：Fake=1/2 降采样 + 可分离盒式平滑（加权平均，无高斯）；Real=Skia 高斯。
+        private BackdropBlurMode _blurMode = BackdropBlurMode.Fake;
+        private int _fakeBlurScale = 2;      // Fake 模式降采样除数（默认 1/2）
+        private int _fakeBlurRadius = 6;     // Fake 模式盒式平滑半径（降采样后的像素）
 
         private WebGuiView _view;
         private bool _visible;
@@ -59,7 +59,7 @@ namespace CuRmlGUI.Presentation
 
         public void Init(KeyCode toggleKey, float dpiScale, ManualLogSource log,
             bool autoShow = false, bool backdrop = false,
-            BackdropBlurMode blurMode = BackdropBlurMode.Real, int fakeBlurScale = 16)
+            BackdropBlurMode blurMode = BackdropBlurMode.Fake, int fakeBlurScale = 2, int fakeBlurRadius = 6)
         {
             _toggleKey = toggleKey;
             _dpiScale = dpiScale <= 0f ? 1f : dpiScale;
@@ -68,6 +68,7 @@ namespace CuRmlGUI.Presentation
             _backdropCapture = backdrop;
             _blurMode = blurMode;
             _fakeBlurScale = fakeBlurScale < 1 ? 1 : fakeBlurScale;
+            _fakeBlurRadius = fakeBlurRadius < 0 ? 0 : fakeBlurRadius;
         }
 
         /// <summary>抓屏降采样除数：Real 固定 1/4（模糊源够清晰即可），Fake 用配置的大除数。</summary>
@@ -320,8 +321,7 @@ namespace CuRmlGUI.Presentation
         //
         // 画面本身不含自己 UI → 无需「蒙版剔除 + 图像修补」，X 形变形从根上消失。
         private byte[] _backdropRgba;
-        private int[] _backdropXMap;
-        private int _backdropXMapSrcW = -1, _backdropXMapDstW = -1;
+        private byte[] _blurTmp;
         private Texture2D _pendingShot;   // 已抓屏、待读回像素
         private bool _grabRequested;       // 已排队，等 OnGUI 抓
         private float _nextCapture;
@@ -376,57 +376,51 @@ namespace CuRmlGUI.Presentation
                 int bpp = raw.Length / (sw * sh);
                 if (bpp == 3 || bpp == 4)
                 {
-                    // 预计算目标 x → 源 x，避免每像素做整数除法（原来 54 万次除法 ≈ 数毫秒）。
-                    if (_backdropXMap == null || _backdropXMap.Length != dw || _backdropXMapSrcW != sw || _backdropXMapDstW != dw)
-                    {
-                        _backdropXMap = new int[dw];
-                        for (int x = 0; x < dw; x++)
-                            _backdropXMap[x] = x * sw / dw;
-                        _backdropXMapSrcW = sw;
-                        _backdropXMapDstW = dw;
-                    }
-                    var xmap = _backdropXMap;
-
-                    // 同时把 bottom-up 直接写成 top-down（省掉一次整图翻转）。
-                    // 用裸指针读 NativeArray，避免每像素的边界检查/托管索引开销。
+                    // 盒式降采样：每个目标像素 = 对应源 cell 内**所有像素的加权平均**
+                    // （权重全 1，覆盖整个 cell）。它与双线性同属加权平均，但采样范围更宽，
+                    // 放大后是平滑过渡而不是点采样的大色块；不涉及任何高斯/卷积模糊。
                     unsafe
                     {
                         byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
                             .GetUnsafeReadOnlyPtr(raw);
                         fixed (byte* dstBase = _backdropRgba)
                         {
-                            if (bpp == 4)
+                            for (int y = 0; y < dh; y++)
                             {
-                                for (int y = 0; y < dh; y++)
+                                int sy0 = y * sh / dh;
+                                int sy1 = (y + 1) * sh / dh;
+                                if (sy1 <= sy0) sy1 = sy0 + 1;
+                                if (sy1 > sh) sy1 = sh;
+                                int dstRow = (dh - 1 - y) * dw;   // bottom-up → top-down
+
+                                for (int x = 0; x < dw; x++)
                                 {
-                                    int srcRow = (y * sh / dh) * sw;
-                                    int dstRow = (dh - 1 - y) * dw;
-                                    for (int x = 0; x < dw; x++)
+                                    int sx0 = x * sw / dw;
+                                    int sx1 = (x + 1) * sw / dw;
+                                    if (sx1 <= sx0) sx1 = sx0 + 1;
+                                    if (sx1 > sw) sx1 = sw;
+
+                                    int r = 0, g = 0, b = 0, a = 0, cnt = 0;
+                                    for (int yy = sy0; yy < sy1; yy++)
                                     {
-                                        byte* s = src + (srcRow + xmap[x]) * 4;
-                                        byte* d = dstBase + (dstRow + x) * 4;
-                                        d[0] = s[0];
-                                        d[1] = s[1];
-                                        d[2] = s[2];
-                                        d[3] = s[3];
+                                        byte* p = src + (yy * sw + sx0) * bpp;
+                                        for (int xx = sx0; xx < sx1; xx++)
+                                        {
+                                            r += p[0];
+                                            g += p[1];
+                                            b += p[2];
+                                            a += bpp >= 4 ? p[3] : 255;
+                                            p += bpp;
+                                            cnt++;
+                                        }
                                     }
-                                }
-                            }
-                            else
-                            {
-                                for (int y = 0; y < dh; y++)
-                                {
-                                    int srcRow = (y * sh / dh) * sw;
-                                    int dstRow = (dh - 1 - y) * dw;
-                                    for (int x = 0; x < dw; x++)
-                                    {
-                                        byte* s = src + (srcRow + xmap[x]) * 3;
-                                        byte* d = dstBase + (dstRow + x) * 4;
-                                        d[0] = s[0];
-                                        d[1] = s[1];
-                                        d[2] = s[2];
-                                        d[3] = 255;
-                                    }
+                                    if (cnt == 0) cnt = 1;
+
+                                    byte* d = dstBase + (dstRow + x) * 4;
+                                    d[0] = (byte)(r / cnt);
+                                    d[1] = (byte)(g / cnt);
+                                    d[2] = (byte)(b / cnt);
+                                    d[3] = (byte)(a / cnt);
                                 }
                             }
                         }
@@ -450,6 +444,13 @@ namespace CuRmlGUI.Presentation
                             _backdropRgba[o + 3] = c.a;
                         }
                     }
+                }
+
+                if (_blurMode == BackdropBlurMode.Fake && _fakeBlurRadius > 0)
+                {
+                    // Fake 模式：在 1/2 分辨率上做可分离盒式平滑（滑动窗口加权平均），
+                    // 不调用任何高斯/卷积滤镜；成本 O(像素数)，与半径无关。
+                    BoxBlur(_backdropRgba, dw, dh, _fakeBlurRadius, ref _blurTmp);
                 }
 
                 // 目标区域铺满整个视口（源是降采样图，需拉伸）。
@@ -478,6 +479,80 @@ namespace CuRmlGUI.Presentation
                 Buffer.BlockCopy(rgba, a, row, 0, rowBytes);
                 Buffer.BlockCopy(rgba, b, rgba, a, rowBytes);
                 Buffer.BlockCopy(row, 0, rgba, b, rowBytes);
+            }
+        }
+
+        /// <summary>
+        /// 可分离盒式平滑：水平 + 垂直两遍滑动窗口，窗口内像素等权平均。
+        /// 与双线性放大同属「加权平均」，但采样范围覆盖整个窗口；不使用高斯/卷积。
+        /// 复杂度 O(w*h)，与半径无关。
+        /// </summary>
+        private static void BoxBlur(byte[] rgba, int w, int h, int radius, ref byte[] tmp)
+        {
+            if (radius <= 0 || w <= 1 || h <= 1) return;
+            int n = w * h * 4;
+            if (tmp == null || tmp.Length != n) tmp = new byte[n];
+
+            int win = radius * 2 + 1;
+            int inv = (1 << 16) / win;
+
+            // 水平：rgba → tmp
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w * 4;
+                int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                for (int i = -radius; i <= radius; i++)
+                {
+                    int x = i < 0 ? 0 : (i >= w ? w - 1 : i);
+                    int o = row + x * 4;
+                    s0 += rgba[o]; s1 += rgba[o + 1]; s2 += rgba[o + 2]; s3 += rgba[o + 3];
+                }
+                for (int x = 0; x < w; x++)
+                {
+                    int o = row + x * 4;
+                    tmp[o] = (byte)((s0 * inv) >> 16);
+                    tmp[o + 1] = (byte)((s1 * inv) >> 16);
+                    tmp[o + 2] = (byte)((s2 * inv) >> 16);
+                    tmp[o + 3] = (byte)((s3 * inv) >> 16);
+
+                    int xa = x - radius; if (xa < 0) xa = 0;
+                    int xb = x + radius + 1; if (xb >= w) xb = w - 1;
+                    int oa = row + xa * 4, ob = row + xb * 4;
+                    s0 += rgba[ob] - rgba[oa];
+                    s1 += rgba[ob + 1] - rgba[oa + 1];
+                    s2 += rgba[ob + 2] - rgba[oa + 2];
+                    s3 += rgba[ob + 3] - rgba[oa + 3];
+                }
+            }
+
+            // 垂直：tmp → rgba
+            int stride = w * 4;
+            for (int x = 0; x < w; x++)
+            {
+                int col = x * 4;
+                int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                for (int i = -radius; i <= radius; i++)
+                {
+                    int y = i < 0 ? 0 : (i >= h ? h - 1 : i);
+                    int o = y * stride + col;
+                    s0 += tmp[o]; s1 += tmp[o + 1]; s2 += tmp[o + 2]; s3 += tmp[o + 3];
+                }
+                for (int y = 0; y < h; y++)
+                {
+                    int o = y * stride + col;
+                    rgba[o] = (byte)((s0 * inv) >> 16);
+                    rgba[o + 1] = (byte)((s1 * inv) >> 16);
+                    rgba[o + 2] = (byte)((s2 * inv) >> 16);
+                    rgba[o + 3] = (byte)((s3 * inv) >> 16);
+
+                    int ya = y - radius; if (ya < 0) ya = 0;
+                    int yb = y + radius + 1; if (yb >= h) yb = h - 1;
+                    int oa = ya * stride + col, ob = yb * stride + col;
+                    s0 += tmp[ob] - tmp[oa];
+                    s1 += tmp[ob + 1] - tmp[oa + 1];
+                    s2 += tmp[ob + 2] - tmp[oa + 2];
+                    s3 += tmp[ob + 3] - tmp[oa + 3];
+                }
             }
         }
         private static KeyCode[] BuildKeyList()

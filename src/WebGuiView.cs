@@ -39,12 +39,13 @@ namespace CuRmlGUI
         private float _lastRenderTime = -1f;
 
         /// <summary>
-        /// 连续动画驱动的最大重绘帧率（fps）。默认 30。
+        /// 连续动画/输入驱动的最大重绘帧率（fps）。默认 50。
         /// 设为 0 或负值表示不限速（每帧重绘，CPU 占用更高）；正数则限制为对应帧率。
-        /// 仅影响「纯动画」驱动的重绘；输入、文档变更、backdrop 更新仍立即重绘。
+        /// 注意：它同时约束「输入/hover」触发的重绘（这些重绘每次成本 10~20ms，
+        /// 不限制的话鼠标划过 UI 就会逼着每帧全量重绘，把游戏帧率拖下去）。
         /// 供模组开发者在代码中按需调整。
         /// </summary>
-        public float MaxRenderFps { get; set; } = 30f;
+        public float MaxRenderFps { get; set; } = 50f;
 
         // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
@@ -304,15 +305,15 @@ select selectbox option:hover {
         public bool HasBackdrop => _compositor.HasBackdrop;
 
         /// <summary>
-        /// backdrop 模糊的实现方式（默认 <see cref="Render.BackdropBlurMode.Real"/>）。
+        /// backdrop 模糊的实现方式（库默认 <see cref="Render.BackdropBlurMode.Fake"/>）。
+        ///
+        /// <para>这是给**模组开发者**的代码级 API：任何使用 WebGuiView 的模组默认就是低成本伪模糊，
+        /// 不需要改我们的插件配置；想要更真实的观感再自行设为 <see cref="Render.BackdropBlurMode.Real"/>。</para>
+        ///
+        /// <para><see cref="Render.BackdropBlurMode.Fake"/>：backdrop 链上的 <c>blur()</c> 不再执行，
+        /// 模糊观感改由「超低分辨率 backdrop + 双线性放大」提供（成本≈0）。调用方应把抓屏降采样
+        /// 除数调大（例如 8~16），否则放大不足、观感接近真实像素。</para>
         /// </summary>
-        /// <remarks>
-        /// <see cref="Render.BackdropBlurMode.Fake"/>：backdrop 链上的 <c>blur()</c> 不再执行，
-        /// 模糊观感改由「超低分辨率 backdrop + 双线性放大」提供（成本≈0，但不是高斯模糊）。
-        /// 只影响 backdrop-filter 的模糊；普通 <c>filter: blur()</c> 不受影响。
-        /// 采样率由调用方的抓屏降采样决定：开启后应把降采样除数调大（例如 4 → 16），
-        /// 否则纹理放大不足、观感接近真实像素。
-        /// </remarks>
         public BackdropBlurMode BackdropBlurMode
         {
             get => _compositor.BackdropBlurMode;
@@ -372,17 +373,19 @@ select selectbox option:hover {
             if (_compositor.ConsumeBackdropDirty()) RequestRender(1);   // backdrop 只影响玻璃，1 帧足够
 
             // 渲染判定：
-            //  - 输入/文档/backdrop 变更 → linger（立即渲染 + 传播 2 帧）；
-            //  - 纯连续动画 → 按 MaxRenderFps 限速（默认 30fps，0 表示不限速）。
-            bool render = _renderLinger > 0;
-            if (!render && NativeMethods.wg_update_delay(_ctx) <= 0.0)
-            {
-                float fps = MaxRenderFps;
-                if (fps <= 0f || UnityEngine.Time.unscaledTime - _lastRenderTime >= 1f / fps)
-                    render = true;
-            }
+            //  - 输入/文档/backdrop 变更 → linger；
+            //  - 纯连续动画 → wg_update_delay <= 0；
+            // 两者都受 MaxRenderFps 约束（否则鼠标 hover 会逼着每帧全量重绘，
+            // 每次 10~20ms，直接把游戏帧率拖下去）。0 表示不限速。
+            bool wantRender = _renderLinger > 0;
+            if (!wantRender && NativeMethods.wg_update_delay(_ctx) <= 0.0)
+                wantRender = true;
 
-            if (!render) return false;
+            if (!wantRender) return false;
+
+            float fps = MaxRenderFps;
+            if (fps > 0f && UnityEngine.Time.unscaledTime - _lastRenderTime < 1f / fps)
+                return false;
 
             _compositor.BeginFrame();
             NativeMethods.wg_render(_ctx);     // 同步触发 DrawGeometry / CreateTexture / 图层回调

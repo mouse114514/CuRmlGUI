@@ -34,6 +34,7 @@ namespace CuRmlGUI
         private ConfigEntry<bool> _spikeBackdrop;
         private ConfigEntry<BackdropBlurMode> _spikeBackdropBlur;
         private ConfigEntry<int> _spikeFakeBlurScale;
+        private ConfigEntry<int> _spikeFakeBlurRadius;
 
         private void Awake()
         {
@@ -79,14 +80,19 @@ namespace CuRmlGUI
                 "抓取游戏画面作为 backdrop 注入（真·毛玻璃 backdrop-filter 的模糊源）。");
 
             _spikeBackdropBlur = Config.Bind(
-                "Spike", "BackdropBlur", BackdropBlurMode.Real,
-                "backdrop 模糊实现：Real=Skia 高斯模糊（观感真实，成本随面积增长）；" +
-                "Fake=伪模糊（不执行模糊，改用超低采样率 backdrop + 双线性放大，成本≈0，观感更\"假\"）。");
+                "Spike", "BackdropBlur", BackdropBlurMode.Fake,
+                "backdrop 模糊实现：Fake=伪模糊（默认，不执行高斯模糊，改用超低采样率 backdrop + " +
+                "双线性放大，成本≈0）；Real=Skia 高斯模糊（观感真实，成本随面积增长，较重）。");
 
             _spikeFakeBlurScale = Config.Bind(
-                "Spike", "FakeBlurScale", 16,
-                "Fake 模式下的抓屏降采样除数：每 N×N 像素取 1 个。越大越模糊、越省；" +
-                "Real 模式不使用此项（固定为 4）。");
+                "Spike", "FakeBlurScale", 2,
+                "Fake 模式下的抓屏降采样除数：每 N×N 像素做一次盒式加权平均（不是点采样）。" +
+                "默认 2；Real 模式不使用此项。");
+
+            _spikeFakeBlurRadius = Config.Bind(
+                "Spike", "FakeBlurRadius", 6,
+                "Fake 模式下的盒式平滑半径（降采样后的像素）：滑动窗口等权平均，成本与半径无关。" +
+                "实际观感半径 ≈ 该值 × FakeBlurScale。0 表示不额外平滑。");
         }
 
         private void CreateDemo()
@@ -97,7 +103,7 @@ namespace CuRmlGUI
             var overlay = gameObject.AddComponent<LiquidGlassDemo>();
             overlay.Init(_spikeToggleKey.Value,
                 _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value,
-                _spikeBackdropBlur.Value, _spikeFakeBlurScale.Value);
+                _spikeBackdropBlur.Value, _spikeFakeBlurScale.Value, _spikeFakeBlurRadius.Value);
             Logger.LogInfo("LiquidGlass demo created (press " + _spikeToggleKey.Value +
                 " to toggle, autoShow=" + _spikeAutoShow.Value + ", backdrop=" + _spikeBackdrop.Value +
                 ", blur=" + _spikeBackdropBlur.Value + ").");

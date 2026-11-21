@@ -799,7 +799,7 @@ namespace CuRmlGUI.Render
         }
 
         /// <summary>
-        /// backdrop 模糊的实现方式（默认 <see cref="BackdropBlurMode.Real"/>）。
+        /// backdrop 模糊的实现方式（默认 <see cref="BackdropBlurMode.Fake"/>）。
         ///
         /// <para><see cref="BackdropBlurMode.Fake"/>：<b>backdrop 链上的 blur 滤镜不执行</b>，
         /// 模糊观感改由「超低分辨率 backdrop + 双线性放大」提供：把游戏画面以很低的采样率
@@ -807,10 +807,13 @@ namespace CuRmlGUI.Render
         ///
         /// <para>这不是高斯模糊（过渡是线性的、缺少高斯核的频域衰减），但成本几乎为 0。</para>
         ///
+        /// <para><see cref="BackdropBlurMode.Real"/>：执行 Skia 高斯模糊（观感更真实），
+        /// 成本正比于元素面积，大面积玻璃会明显变重。</para>
+        ///
         /// <para>只影响 source 为基座（handle 0，即 backdrop 所在图层）的滤镜链；
         /// 普通 <c>filter: blur()</c>（source 是元素自己的离屏图层）不受影响。</para>
         /// </summary>
-        public BackdropBlurMode BackdropBlurMode { get; set; } = BackdropBlurMode.Real;
+        public BackdropBlurMode BackdropBlurMode { get; set; } = BackdropBlurMode.Fake;
 
         /// <summary>滤镜链里是否含 mask（mask 需与全图对齐，故不支持区域受限路径）。</summary>
         private bool ChainHasMask(IntPtr filters, int filterCount)
@@ -825,6 +828,7 @@ namespace CuRmlGUI.Render
 
         /// <summary>
         /// 决定滤镜链的计算分辨率：仅「大区域 + 模糊/阴影」降到 0.5（面积 /4）。
+        /// 伪模糊模式下模糊被跳过，但整块玻璃本来就是低分辨率，仍按 0.5 计算以省成本。
         /// 小元素保持全分辨率；含 mask 的链必须全图对齐，不降。
         /// </summary>
         private float FilterPreScale(IntPtr filters, int filterCount, bool skipBlur, int area)
@@ -835,8 +839,7 @@ namespace CuRmlGUI.Render
                 int h = ReadFilterHandle(filters, i);
                 if (!_filters.TryGetValue(h, out var e)) continue;
                 if (e.Kind == FilterKind.Mask) return 1f;
-                if (!(skipBlur && e.IsBlur)
-                    && (e.SubKind == FilterSubKind.Blur || e.SubKind == FilterSubKind.DropShadow))
+                if (e.SubKind == FilterSubKind.Blur || e.SubKind == FilterSubKind.DropShadow)
                     return 0.5f;
             }
             return 1f;
