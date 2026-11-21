@@ -243,6 +243,7 @@ namespace CuRmlGUI.Presentation
         private static readonly string[] GlassIds =
         {
             "card-weather", "card-music", "card-cal", "card-battery", "card-cc",
+            "card-compat",
         };
 
         private void LoadFonts()
@@ -435,6 +436,16 @@ namespace CuRmlGUI.Presentation
       <div class=""cc-slider""><span class=""s-label"">亮度</span><input type=""range"" min=""0"" max=""100"" value=""78""/></div>
       <div class=""cc-slider""><span class=""s-label"">音量</span><input type=""range"" min=""0"" max=""100"" value=""52""/></div>
     </div>
+
+    <!-- CSS 兼容层：以下三个盒子用浏览器写法，经 CssCompat 重写为 RmlUi 等价属性后渲染 -->
+    <div id=""card-compat"" class=""card compat"">
+      <div class=""cp-title"">CSS 兼容层</div>
+      <div class=""cp-row"">
+        <div class=""cp-box cp-shadow"">text-shadow</div>
+        <div class=""cp-box cp-outline"">outline</div>
+        <div class=""cp-box cp-gradient"">background 渐变</div>
+      </div>
+    </div>
   </div>
 </body>
 </rml>
@@ -519,6 +530,19 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .cc-slider { display: flex; margin-top: 14px; }
 .s-label { width: 44px; font-size: 13px; color: rgba(255,255,255,0.72); }
 .cc-slider input { flex: 1; }
+
+/* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
+.compat { width: 620px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
+.cp-title { font-size: 15px; font-weight: bold; text-shadow: 0px 2px 4px rgba(0, 0, 0, 0.55); }
+.cp-row { display: flex; margin-top: 14px; }
+.cp-box {
+  flex: 1; height: 44px; border-radius: 12px;
+  text-align: center; line-height: 44px; font-size: 12px; color: #ffffff;
+}
+.cp-shadow  { background-color: rgba(255,255,255,0.10); text-shadow: 2px 2px 0px #ff5a5a; }
+.cp-outline { background-color: rgba(255,255,255,0.10); outline: 2px solid #34C759; }
+.cp-gradient { background: linear-gradient(135deg, #ff7ab8, #7b61ff 55%, #4facfe); }
+.cp-outline, .cp-gradient { margin-left: 12px; }
 ";
     }
 }

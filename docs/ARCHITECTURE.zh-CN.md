@@ -243,6 +243,6 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build
 ```
 
 `tools/render-test` 是离屏自检工具。它逐像素断言坐标、颜色顺序、预乘、
-字形绘制、裁剪、`Modulate` 混合、内外阴影、文字效果与背景朝向，
-使渲染缺陷在游戏启动前暴露。运行前需将新生成的 `WebGUINative.dll`
+字形绘制、裁剪、`Modulate` 混合、内外阴影、文字效果、背景朝向以及
+CSS 兼容重写，使渲染缺陷在游戏启动前暴露。运行前需将新生成的 `WebGUINative.dll`
 复制到测试输出目录，否则 `DllImport` 会解析到旧副本。

@@ -259,13 +259,25 @@ select selectbox option:hover {
             _compositor.RegisterFilter(name, builder);
         }
 
+        /// <summary>
+        /// 浏览器 CSS 兼容层（默认开启）。开启后 <see cref="LoadDocument"/> 会在送进原生之前，
+        /// 把 RmlUi 6.3 未注册的 <c>text-shadow</c>、<c>outline</c>、单渐变 <c>background</c>
+        /// 重写为等价的 <c>font-effect</c> / <c>box-shadow</c> / <c>decorator</c>。
+        /// 无法安全转换的写法原样保留并告警，绝不静默改变语义。排查渲染问题时设为 false。
+        /// </summary>
+        public bool CssCompatEnabled { get; set; } = true;
+
         public bool LoadDocument(string rml, string rcss = null)
         {
             ThrowIfDisposed();
+            string css = DefaultControlsCss + (rcss ?? string.Empty);
+            css = CssCompat.Rewrite(css, CssCompatEnabled,
+                msg => Debug.LogWarning("[CuRmlGUI] CSS compat: " + msg));
             bool ok = NativeMethods.wg_load_document(
                 _ctx,
                 Utf8.ToNullTerminated(rml ?? string.Empty),
-                Utf8.ToNullTerminated(DefaultControlsCss + (rcss ?? string.Empty))) != 0;            RequestRender();
+                Utf8.ToNullTerminated(css)) != 0;
+            RequestRender();
             return ok;
         }
 

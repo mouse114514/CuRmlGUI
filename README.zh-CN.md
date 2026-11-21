@@ -24,6 +24,9 @@ SkiaSharp 负责将绘制指令光栅化并合成为位图，再由一张 Unity 
   `:hover` 与 `:active`、`rgba()`、`overflow: hidden`、flex 布局（含 `flex-wrap`）、
   渐变、变换、过渡、关键帧动画、`box-shadow`（含 `inset`）以及 `font-effect`
   的文字投影与描边均由 RmlUi 原生实现。
+- **浏览器 CSS 兼容层。** `text-shadow`、`outline` 与单渐变 `background` 声明会在
+  解析前重写为 RmlUi 等价写法（`WebGuiView.CssCompatEnabled`，默认开启），
+  使浏览器风格的标记依然可用。无法安全转换的写法保留原样并记录一次告警。
 - **与官方 RmlUi 后端保持一致的渲染接口。** 裁剪区域、用于圆角裁剪的遮罩、离屏图层、
   `filter` 与 `backdrop-filter`、`mask-image`、渐变着色器以及二维变换，均通过把
   `RmlUi_Renderer_GL3` 的每个回调映射到等价的 Skia 操作来实现。

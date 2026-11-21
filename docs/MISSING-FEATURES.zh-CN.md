@@ -52,6 +52,20 @@
 
 **控件外观。** 库为 checkbox、radio、range、select 与文本输入提供了默认样式。
 
+### 1.1 CSS 兼容层
+
+CuRmlGUI 内置一个声明级重写器（`WebGuiView.CssCompatEnabled`，默认开启），
+在解析之前把 RmlUi 未注册的三个浏览器 CSS 属性映射为 RmlUi 等价写法：
+
+- `text-shadow: x y [blur] color` → `font-effect: shadow(x y color)`。模糊半径会被
+  丢弃并告警，因为 RmlUi 的 font-effect 没有模糊。
+- `outline: w style color` → `box-shadow: 0 0 0 (w + offset) color`，并把
+  `outline-offset` 并入扩散值。非 `solid` 线型会退化为实线。
+- `background: linear-gradient(...)` / `radial-gradient(...)` →
+  `background-color: transparent; decorator: ...`，仅当整条声明是单个渐变函数时转换。
+
+无法转换的写法逐字节保留，并记录一次告警。
+
 ## 2. 缺口
 
 ### 2.1 `::before` 与 `::after` 伪元素
@@ -60,9 +74,9 @@ RmlUi 不支持伪元素。高光罩、渐变压暗以及其他装饰节点都�
 
 ### 2.2 以 `background` 使用渐变
 
-渐变只能通过 `decorator: linear-gradient(...)` 使用，不能作为背景图像，
-也无法与 `background-color` 或多层背景叠加。因此，组合半透明白底、顶部高光
-与边缘渐变需要多个嵌套元素。
+渐变可以作为单条 `background: linear-gradient(...)` 声明直接使用（经兼容层重写为
+`decorator`）。它仍然不能与颜色组合，也不能在一条声明里叠加多层背景。
+因此，组合半透明白底、顶部高光与边缘渐变需要多个嵌套元素或多次 `decorator` 声明。
 
 ### 2.3 `clip-path`
 
@@ -83,8 +97,10 @@ RmlUi 不支持伪元素。高光罩、渐变压暗以及其他装饰节点都�
 
 ### 2.7 `outline`
 
-没有盒级的 `outline` 属性。焦点描边只能使用会影响布局的 `border`，
-或使用外阴影近似。文字描边可使用 `font-effect: outline(...)`。
+RmlUi 没有盒级的 `outline` 属性。兼容层会把 `outline: w style color`（以及
+`outline-offset`）重写为外阴影，宽度为像素长度时可用。非 `solid` 线型会退化为
+实线。焦点描边也可使用会影响布局的 `border`，或手写外阴影近似。
+文字描边可使用 `font-effect: outline(...)`。
 
 ### 2.8 其他小项
 

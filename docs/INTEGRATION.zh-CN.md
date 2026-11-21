@@ -187,9 +187,27 @@ view.BackdropBlurMode = BackdropBlurMode.Real;   // Skia 高斯模糊，开销�
 `Real` 模式的耗时与元素面积成正比：在 CPU 上，400×260 约需 2.6 ms，
 800×520 约需 14.9 ms，全屏约需 81 ms。
 
-### 7.4 文字投影与描边
+### 7.4 CSS 兼容层
 
-RmlUi 没有 `text-shadow` 属性，改用 `font-effect`；它还支持 `glow` 与 `blur`：
+RmlUi 6.3 没有注册若干浏览器 CSS 属性。CuRmlGUI 内置一个文本级兼容层（默认开启），
+在样式表解析之前把它们重写为 RmlUi 等价写法，使浏览器风格的标记依然可用：
+
+| 浏览器 CSS | RmlUi 等价写法 | 说明 |
+| --- | --- | --- |
+| `text-shadow: x y [blur] color` | `font-effect: shadow(x y color)` | 模糊半径会被丢弃（RmlUi 的 font-effect 无模糊），并给出一次告警。`text-shadow: none` 不处理。 |
+| `outline: w style color` | `box-shadow: 0 0 0 (w + offset) color` | 非 `solid` 线型会退化为实线并告警。`outline-offset` 会并入扩散值。`outline: none` 不处理。 |
+| `background: linear-gradient(...)` | `background-color: transparent; decorator: linear-gradient(...)` | 仅当整条声明恰好是单个 `linear-gradient` / `radial-gradient` 函数时转换。与颜色或多层背景混合的渐变保持原样。 |
+
+该层是纯声明重写器（`src/Render/CssCompat.cs`）。它解析完整 RCSS，包括注释、字符串、
+括号以及 `@media` / `@keyframes` / `@font-face` / `@decorator` 块，对无法安全转换的
+声明**逐字节保留**，绝不静默改变语义；不支持的转换只记录一次告警。如需关闭（例如排查
+某个样式表）：
+
+```csharp
+view.CssCompatEnabled = false;   // 默认 true
+```
+
+原生手写 RmlUi 写法依然可用，且在不需浏览器兼容时是推荐形式：
 
 ```css
 .card-title { font-effect: shadow(0px 1px rgba(0, 0, 0, 0.55)), blur(1px); }

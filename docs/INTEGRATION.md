@@ -205,10 +205,30 @@ the result to the element.
 `Real` mode costs time proportional to element area: about 2.6 ms for 400×260,
 14.9 ms for 800×520 and 81 ms for the full screen on the CPU.
 
-### 7.4 Text shadows and outlines
+### 7.4 CSS compatibility layer
 
-RmlUi has no `text-shadow` property. Use `font-effect` instead, which also accepts
-`glow` and `blur`:
+RmlUi 6.3 does not register several browser CSS properties. CuRmlGUI ships a text-level
+compatibility layer (default on) that rewrites them to RmlUi equivalents before the
+stylesheet is parsed, so browser-style markup keeps working:
+
+| Browser CSS | RmlUi equivalent | Notes |
+| --- | --- | --- |
+| `text-shadow: x y [blur] color` | `font-effect: shadow(x y color)` | The blur radius is dropped (RmlUi font-effects have no blur), with a one-time warning. `text-shadow: none` is ignored. |
+| `outline: w style color` | `box-shadow: 0 0 0 (w + offset) color` | Non-`solid` styles degrade to solid with a warning. `outline-offset` is folded into the spread. `outline: none` is ignored. |
+| `background: linear-gradient(...)` | `background-color: transparent; decorator: linear-gradient(...)` | Only when the whole declaration is a single `linear-gradient` / `radial-gradient` function. Gradients combined with colours or repeated background layers are left untouched. |
+
+The layer is a pure declaration rewriter (`src/Render/CssCompat.cs`). It parses the full
+RCSS including comments, strings, parens and `@media` / `@keyframes` / `@font-face` /
+`@decorator` blocks, and leaves every declaration it cannot safely convert byte-for-byte
+unchanged — never silently altering semantics. Unsupported conversions log a single
+warning. To disable it (e.g. when debugging a stylesheet):
+
+```csharp
+view.CssCompatEnabled = false;   // default true
+```
+
+Native, hand-written RmlUi style remains available and is the recommended form when you
+do not need browser compatibility:
 
 ```css
 .card-title { font-effect: shadow(0px 1px rgba(0, 0, 0, 0.55)), blur(1px); }

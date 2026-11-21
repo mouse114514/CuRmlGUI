@@ -219,6 +219,9 @@ namespace CuRmlGUI.RenderTest
             // box-shadow: inset（裁剪遮罩路径）与 font-effect: shadow()（文字投影）。
             s_failures += EffectsTest.Run(flip, font, family);
 
+            // 浏览器 CSS 兼容层：text-shadow/outline/单渐变 background → RmlUi 等价写法。
+            s_failures += CssCompatTest.Run(flip, font, family);
+
             Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
 
             NativeMethods.wg_context_destroy(s_ctx);

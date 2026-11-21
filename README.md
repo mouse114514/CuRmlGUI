@@ -30,6 +30,10 @@ not suitable for production use.
   (including `flex-wrap`), gradients, transforms, transitions, keyframe
   animations, `box-shadow` (including `inset`) and `font-effect` text shadows and
   outlines are provided by RmlUi itself.
+- **Browser CSS compatibility layer.** `text-shadow`, `outline` and single-gradient
+  `background` declarations are rewritten to their RmlUi equivalents before parsing
+  (`WebGuiView.CssCompatEnabled`, default on), so browser-style markup keeps
+  working. Unsafe conversions are left untouched and logged once.
 - **Render backend that follows the official RmlUi contract.** Scissor regions,
   clip masks for rounded clipping, off-screen layers, `filter` and
   `backdrop-filter`, `mask-image`, gradient shaders and 2D transforms are

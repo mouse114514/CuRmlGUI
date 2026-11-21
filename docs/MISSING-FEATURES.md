@@ -56,6 +56,22 @@ sources (`StyleSheetSpecification`, `PropertyParserBoxShadow`, `DecoratorGradien
 **Control appearance.** Default styling for checkbox, radio, range, select and text
 input is provided by the library.
 
+### 1.1 CSS compatibility layer
+
+CuRmlGUI ships a declaration-level rewriter (`WebGuiView.CssCompatEnabled`, default
+on) that maps three browser CSS properties RmlUi does not register onto RmlUi
+equivalents before parsing:
+
+- `text-shadow: x y [blur] color` → `font-effect: shadow(x y color)`. The blur
+  radius is dropped with a warning, because RmlUi font-effects have no blur.
+- `outline: w style color` → `box-shadow: 0 0 0 (w + offset) color`, folding
+  `outline-offset` into the spread. Non-`solid` styles degrade to solid.
+- `background: linear-gradient(...)` / `radial-gradient(...)` →
+  `background-color: transparent; decorator: ...`, only when the declaration is
+  a single gradient function.
+
+Anything the layer cannot convert is left byte-for-byte untouched and logged once.
+
 ## 2. Gaps
 
 ### 2.1 `::before` and `::after` pseudo-elements
@@ -65,10 +81,12 @@ decorative nodes require a real element in the markup.
 
 ### 2.2 Gradients as `background`
 
-A gradient can only be used through `decorator: linear-gradient(...)`, not as a
-background image, and it cannot be combined or stacked with `background-color` or
-multiple background layers. Combining a translucent base, a top highlight and an
-edge gradient therefore requires several nested elements.
+A gradient can be used directly as a single `background: linear-gradient(...)`
+declaration through the compatibility layer, which rewrites it to a `decorator`.
+It still cannot be combined with a colour or stacked into multiple background
+layers in one declaration. Combining a translucent base, a top highlight and an
+edge gradient therefore requires several nested elements or separate `decorator`
+calls.
 
 ### 2.3 `clip-path`
 
@@ -89,9 +107,11 @@ Square or fixed-ratio cards need an explicit height.
 
 ### 2.7 `outline`
 
-There is no box-level `outline` property. Focus rings must use `border`, which
-affects layout, or an outer `box-shadow`. Text outlines are available through
-`font-effect: outline(...)`.
+There is no box-level `outline` property in RmlUi. The compatibility layer rewrites
+`outline: w style color` (plus `outline-offset`) to an outer `box-shadow`, which
+works when the width is a pixel length. Non-`solid` styles degrade to solid. Focus
+rings can also use `border`, which affects layout, or a hand-written outer
+`box-shadow`. Text outlines are available through `font-effect: outline(...)`.
 
 ### 2.8 Smaller items
 
