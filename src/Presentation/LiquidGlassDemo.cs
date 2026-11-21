@@ -532,9 +532,9 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .cc-slider input { flex: 1; }
 
 /* ==== 控制中心：液态玻璃控件——只做光影（变亮/变暗），无颜色/无填充/无边框 ====
-   主体透明，透出 GPU 模糊背景；仅用 box-shadow 的亮线与暗块塑形：
-     顶部 inset 亮线 = 边缘高光；底部 inset 暗线 = 阴影厚度；外阴影 = 浮起；
-     关闭态（未选中）用内部暗块表示「关」，开启态（选中）透明偏亮。
+   主体透明，透出 GPU 模糊背景；仅用 box-shadow 的亮/暗塑形：
+     顶部 inset 亮 = 高光；底部 inset 亮 = 环境光反光（暗环境也能看见底边）；
+     外阴影 = 浮起；关闭态（未选中）内部变暗表示「关」。
    滑块子元素只用视觉属性，不加 display/position。 */
 input[type=checkbox] {
   width: 20px; height: 20px;
@@ -542,23 +542,23 @@ input[type=checkbox] {
   border-radius: 6px;
   background-color: rgba(0, 0, 0, 0.22);          /* 关闭：内部变暗 */
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.45),        /* 顶部边缘高光（弱） */
-      inset 0 -1px 1px rgba(0,0,0,0.30),           /* 底部内暗 */
-      0 2px 5px rgba(0,0,0,0.42);                  /* 外阴影 */
+      inset 0 2px 2px rgba(255,255,255,0.55),      /* 顶部高光 */
+      inset 0 -2px 3px rgba(255,255,255,0.30),     /* 底部环境光反光 */
+      0 3px 8px rgba(0,0,0,0.50);                  /* 外侧投影 */
   vertical-align: -4px;
 }
 input[type=checkbox]:hover {
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.55),
-      inset 0 -1px 1px rgba(0,0,0,0.28),
-      0 2px 5px rgba(0,0,0,0.42);
+      inset 0 2px 2px rgba(255,255,255,0.65),
+      inset 0 -2px 3px rgba(255,255,255,0.36),
+      0 3px 8px rgba(0,0,0,0.52);
 }
 input[type=checkbox]:checked {
   background-color: transparent;                   /* 开启：透明偏亮 */
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.90),        /* 顶部边缘高光（强） */
-      inset 0 -1px 1px rgba(0,0,0,0.25),
-      0 2px 6px rgba(0,0,0,0.50);
+      inset 0 2px 2px rgba(255,255,255,0.85),      /* 顶部高光 */
+      inset 0 -2px 3px rgba(255,255,255,0.40),     /* 底部环境光反光 */
+      0 3px 8px rgba(0,0,0,0.52);                  /* 外侧投影 */
 }
 
 input[type=range] { height: 18px; vertical-align: -4px; }
@@ -568,8 +568,8 @@ input[type=range] slidertrack {
   background-color: transparent;
   border-radius: 2px;
   box-shadow:
-      inset 0 1px 1px rgba(0,0,0,0.35),            /* 凹槽顶部内暗 */
-      inset 0 -1px 0 rgba(255,255,255,0.20);       /* 底部反光 */
+      inset 0 1px 2px rgba(0,0,0,0.45),            /* 凹槽顶部内暗 */
+      inset 0 -1px 1px rgba(255,255,255,0.30);     /* 底部环境光反光 */
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px;
@@ -584,24 +584,22 @@ input[type=range] sliderbar {
   border-radius: 9px;
   background-color: transparent;
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.98),        /* 顶部高光 */
-      inset 0 0 0 1px rgba(255,255,255,0.30),      /* 一圈玻璃边 */
-      inset 0 -2px 2px rgba(0,0,0,0.22),           /* 底部内暗 */
-      0 3px 8px rgba(0,0,0,0.50);                  /* 外阴影 */
+      inset 0 2px 2px rgba(255,255,255,0.75),      /* 顶部高光 */
+      inset 0 -2px 3px rgba(255,255,255,0.30),     /* 底部环境光反光 */
+      0 4px 10px rgba(0,0,0,0.55);                 /* 外侧投影 */
 }
 input[type=range] sliderbar:hover {
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.90),
-      inset 0 0 0 1px rgba(255,255,255,0.30),
-      inset 0 -2px 2px rgba(0,0,0,0.18),
-      0 3px 8px rgba(0,0,0,0.50);
+      inset 0 2px 2px rgba(255,255,255,0.85),
+      inset 0 -2px 3px rgba(255,255,255,0.38),
+      0 4px 10px rgba(0,0,0,0.58);
 }
 input[type=range] sliderbar:active {
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.90),
+      inset 0 2px 2px rgba(255,255,255,0.75),
       inset 0 0 6px rgba(0,0,0,0.20),
-      inset 0 0 0 1px rgba(255,255,255,0.30),
-      0 3px 8px rgba(0,0,0,0.50);
+      inset 0 -2px 3px rgba(255,255,255,0.30),
+      0 4px 10px rgba(0,0,0,0.58);
 }
 
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
