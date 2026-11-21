@@ -48,7 +48,7 @@ namespace CuRmlGUI.RenderTest
 
             // —— CSS 文本断言：验证控件是纯光影（无颜色/填充/边框/渐变）。 ——
             failures += CheckContains(Css, "inset 0 2px 2px", "顶部高光 inset(亮)");
-            failures += CheckContains(Css, "inset 0 -2px 3px", "底部环境光反光 inset(亮)");
+            failures += CheckContains(Css, "inset 0 -3px 4px", "底部环境光反光 inset(亮)");
             failures += CheckContains(Css, "0 3px 8px", "checkbox 外阴影(暗)");
             failures += CheckContains(Css, "0 4px 10px", "圆钮外阴影(暗)");
             failures += CheckContains(Css, "background-color: rgba(0,0,0,0.22)", "关闭态内部变暗");
@@ -204,18 +204,18 @@ input[type=checkbox] {
   width: 20px; height: 20px; border-width: 0; border-radius: 6px;
   background-color: rgba(0,0,0,0.22);
   box-shadow: inset 0 2px 2px rgba(255,255,255,0.55),
-              inset 0 -2px 3px rgba(255,255,255,0.30),
+              inset 0 -3px 4px rgba(255,255,255,0.70),
               0 3px 8px rgba(0,0,0,0.50);
 }
 input[type=checkbox]:checked {
   background-color: transparent;
   box-shadow: inset 0 2px 2px rgba(255,255,255,0.85),
-              inset 0 -2px 3px rgba(255,255,255,0.40),
+              inset 0 -3px 4px rgba(255,255,255,0.80),
               0 3px 8px rgba(0,0,0,0.52);
 }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px; border-width: 0; background-color: transparent; border-radius: 2px;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(255,255,255,0.30);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(255,255,255,0.50);
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.22);
@@ -225,7 +225,7 @@ input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
   border-radius: 9px; background-color: transparent;
   box-shadow: inset 0 2px 2px rgba(255,255,255,0.75),
-              inset 0 -2px 3px rgba(255,255,255,0.30),
+              inset 0 -3px 4px rgba(255,255,255,0.70),
               0 4px 10px rgba(0,0,0,0.55);
 }
 input[type=range] sliderarrowdec, input[type=range] sliderarrowinc { display: none; }

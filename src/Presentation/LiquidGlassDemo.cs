@@ -533,7 +533,7 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 
 /* ==== 控制中心：液态玻璃控件——只做光影（变亮/变暗），无颜色/无填充/无边框 ====
    主体透明，透出 GPU 模糊背景；仅用 box-shadow 的亮/暗塑形：
-     顶部 inset 亮 = 高光；底部 inset 亮 = 环境光反光（暗环境也能看见底边）；
+     顶部 inset 亮 = 高光；底部 inset 亮 = 环境光反光（暗环境也能看清底边）；
      外阴影 = 浮起；关闭态（未选中）内部变暗表示「关」。
    滑块子元素只用视觉属性，不加 display/position。 */
 input[type=checkbox] {
@@ -543,21 +543,21 @@ input[type=checkbox] {
   background-color: rgba(0, 0, 0, 0.22);          /* 关闭：内部变暗 */
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.55),      /* 顶部高光 */
-      inset 0 -2px 3px rgba(255,255,255,0.30),     /* 底部环境光反光 */
+      inset 0 -3px 4px rgba(255,255,255,0.70),     /* 底部环境光反光（亮） */
       0 3px 8px rgba(0,0,0,0.50);                  /* 外侧投影 */
   vertical-align: -4px;
 }
 input[type=checkbox]:hover {
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.65),
-      inset 0 -2px 3px rgba(255,255,255,0.36),
+      inset 0 -3px 4px rgba(255,255,255,0.75),
       0 3px 8px rgba(0,0,0,0.52);
 }
 input[type=checkbox]:checked {
   background-color: transparent;                   /* 开启：透明偏亮 */
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.85),      /* 顶部高光 */
-      inset 0 -2px 3px rgba(255,255,255,0.40),     /* 底部环境光反光 */
+      inset 0 -3px 4px rgba(255,255,255,0.80),     /* 底部环境光反光（亮） */
       0 3px 8px rgba(0,0,0,0.52);                  /* 外侧投影 */
 }
 
@@ -569,7 +569,7 @@ input[type=range] slidertrack {
   border-radius: 2px;
   box-shadow:
       inset 0 1px 2px rgba(0,0,0,0.45),            /* 凹槽顶部内暗 */
-      inset 0 -1px 1px rgba(255,255,255,0.30);     /* 底部环境光反光 */
+      inset 0 -1px 1px rgba(255,255,255,0.50);     /* 底部环境光反光（亮） */
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px;
@@ -585,20 +585,20 @@ input[type=range] sliderbar {
   background-color: transparent;
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.75),      /* 顶部高光 */
-      inset 0 -2px 3px rgba(255,255,255,0.30),     /* 底部环境光反光 */
+      inset 0 -3px 4px rgba(255,255,255,0.70),     /* 底部环境光反光（亮） */
       0 4px 10px rgba(0,0,0,0.55);                 /* 外侧投影 */
 }
 input[type=range] sliderbar:hover {
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.85),
-      inset 0 -2px 3px rgba(255,255,255,0.38),
+      inset 0 -3px 4px rgba(255,255,255,0.75),
       0 4px 10px rgba(0,0,0,0.58);
 }
 input[type=range] sliderbar:active {
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.75),
       inset 0 0 6px rgba(0,0,0,0.20),
-      inset 0 -2px 3px rgba(255,255,255,0.30),
+      inset 0 -3px 4px rgba(255,255,255,0.70),
       0 4px 10px rgba(0,0,0,0.58);
 }
 
