@@ -891,6 +891,14 @@ void wg_set_mouse_cursor(WG_Context* /*ctx*/, int /*cursor*/)
     // v1 不处理光标
 }
 
+int wg_should_block_input(WG_Context* ctx, float x, float y)
+{
+    if (!ctx || !ctx->ctx) return 0;
+    // RmlUi 的 GetElementAtPoint 已经实现 CSS pointer-events 语义：
+    // 子元素先测；pointer-events:none 的元素返回 nullptr（其子元素仍可命中）。
+    return ctx->ctx->GetElementAtPoint(Vector2f(x, y)) ? 1 : 0;
+}
+
 void wg_free_string(char* p)
 {
     if (p) free(p);

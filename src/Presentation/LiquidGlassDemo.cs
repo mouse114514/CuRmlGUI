@@ -6,6 +6,7 @@ using BepInEx.Logging;
 using CuRmlGUI.Native;
 using CuRmlGUI.Render;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace CuRmlGUI.Presentation
 {
@@ -162,6 +163,22 @@ namespace CuRmlGUI.Presentation
             finally
             {
                 GUI.depth = prevDepth;
+
+                // 吞掉鼠标类 IMGUI 事件，避免游戏自己的 IMGUI（控制台等）也处理同一批点击。
+                // 我们自己的输入走 Update 里的 Input 轮询，不依赖 IMGUI 事件。
+                var ev = Event.current;
+                if (ev != null)
+                {
+                    switch (ev.type)
+                    {
+                        case EventType.MouseDown:
+                        case EventType.MouseUp:
+                        case EventType.MouseDrag:
+                        case EventType.ScrollWheel:
+                            ev.Use();
+                            break;
+                    }
+                }
             }
         }
 
@@ -176,7 +193,80 @@ namespace CuRmlGUI.Presentation
                 if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
                 _grabRequested = false;
             }
+
+            // 输入拦截层：只在可见时生效，避免游戏 UGUI 收到「穿透」点击。
+            if (visible)
+            {
+                EnsureInputBlocker();
+                // 先关闭；由 UpdateInputBlocker 按指针下的 pointer-events 命中动态开关。
+                if (_inputBlocker != null) _inputBlocker.SetActive(false);
+            }
+            else if (_inputBlocker != null)
+            {
+                _inputBlocker.SetActive(false);
+            }
+
             _log?.LogInfo("[CuRmlGUI] LiquidGlass demo " + (visible ? "shown" : "hidden"));
+        }
+
+        // ------------------------------------------------------------------ 输入拦截层
+
+        // 我们的 UI 用 IMGUI 绘制、用 Input 轮询转发给 RmlUi，本身不参与 UGUI 射线检测。
+        // 因此游戏自己的 UGUI（菜单、HUD）仍会收到同一批点击 —— 表现为「点击穿透」。
+        // 这里放一张**全屏透明 Image**（raycastTarget=true）在最高 sortingOrder 的 Canvas 上，
+        // 让 EventSystem 的射线最先命中它，从而吞掉指向游戏 UGUI 的点击。
+        // 注意：对直接读 Input.GetMouseButton 的逻辑无效（那需要 Harmony 拦截）。
+        private GameObject _inputBlocker;
+
+        private void EnsureInputBlocker()
+        {
+            if (_inputBlocker != null) return;
+
+            // 不要 new 根对象：挂在插件自己的 GameObject 下，随 BepInEx 生命周期存活。
+            var canvasGo = new GameObject("CuRmlGUI Input Blocker", typeof(RectTransform));
+            canvasGo.transform.SetParent(transform, false);
+
+            var canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.overrideSorting = true;
+            canvas.sortingOrder = 32760;   // 高于常见 HUD/菜单（通常 < 30000）
+            canvasGo.AddComponent<GraphicRaycaster>();
+
+            var imgGo = new GameObject("Blocker", typeof(RectTransform));
+            imgGo.transform.SetParent(canvasGo.transform, false);
+            var img = imgGo.AddComponent<Image>();
+            // 几乎全透明（alpha=1/255）；完全 alpha=0 有被 CanvasRenderer 剔除的风险。
+            img.color = new Color(0f, 0f, 0f, 1f / 255f);
+            img.raycastTarget = true;
+            var rt = img.rectTransform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+
+            _inputBlocker = canvasGo;
+        }
+
+        /// <summary>
+        /// 按指针位置动态开关输入拦截层：
+        /// 只有指针位于「声明为拦截」的元素上时才启用来吞掉游戏点击；
+        /// 空白/声明 none 的区域关闭拦截层，点击正常穿透。
+        /// </summary>
+        private void UpdateInputBlocker(float x, float y)
+        {
+            if (!_visible || _view == null) return;
+
+            bool block = _view.ShouldBlockInput(x, y);
+            if (!block)
+            {
+                if (_inputBlocker != null && _inputBlocker.activeSelf)
+                    _inputBlocker.SetActive(false);
+                return;
+            }
+
+            EnsureInputBlocker();
+            if (_inputBlocker != null && !_inputBlocker.activeSelf)
+                _inputBlocker.SetActive(true);
         }
 
         private void EnsureView()
@@ -257,6 +347,10 @@ namespace CuRmlGUI.Presentation
             Vector3 mp = Input.mousePosition;
             float x = mp.x;
             float y = Screen.height - mp.y; // Unity 原点在左下，RmlUi 在左上
+
+            // 按「指针下是否命中可交互元素」决定是否启用输入拦截层：
+            // 遵循 CSS pointer-events：none 的容器放行，点击穿透到游戏。
+            UpdateInputBlocker(x, y);
 
             if (float.IsNaN(_lastMouseX) || x != _lastMouseX || y != _lastMouseY)
             {
@@ -578,6 +672,7 @@ namespace CuRmlGUI.Presentation
             _view?.Dispose();
             _view = null;
 
+            if (_inputBlocker != null) { Destroy(_inputBlocker); _inputBlocker = null; }
             if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
             _backdropRgba = null;
         }
@@ -598,31 +693,31 @@ namespace CuRmlGUI.Presentation
     </div>
 
     <div id=""widgets"">
-      <div class=""card weather"">
+      <div class=""card weather""><div class=""sheen""></div>
         <div class=""w-head""><span class=""w-city"">未知星球</span><span class=""w-temp"">-4°</span></div>
         <div class=""w-desc"">多云 · 最高 -1°</div>
         <div class=""w-hours""><span>10时 -3°</span><span>11时 -2°</span><span>12时 0°</span><span>13时 1°</span></div>
       </div>
 
-      <div class=""card music"">
+      <div class=""card music""><div class=""sheen""></div>
         <div class=""album""></div>
         <div class=""m-meta""><span class=""m-title"">Liquid Dreams</span><span class=""m-sub"">CuRmlGUI Radio</span></div>
         <div class=""m-play"">PLAY</div>
       </div>
 
-      <div class=""card cal"">
+      <div class=""card cal""><div class=""sheen""></div>
         <div class=""cal-day"">21</div>
         <div class=""cal-meta""><span class=""cal-title"">今天</span><span class=""cal-sub"">3 个日程</span></div>
       </div>
 
-      <div class=""card battery"">
+      <div class=""card battery""><div class=""sheen""></div>
         <div class=""bat-num"">87%</div>
         <div class=""bat-bar""><div class=""bat-fill""></div></div>
         <div class=""bat-sub"">电量 · 预计 6 小时</div>
       </div>
     </div>
 
-    <div class=""card cc"">
+    <div class=""card cc""><div class=""sheen""></div>
       <div class=""cc-grid"">
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">Wi-Fi</span></label>
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">蓝牙</span></label>
@@ -644,27 +739,40 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; }
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   color: #ffffff;
+  pointer-events: none;            /* 背景放行：点击穿透到游戏 */
 }
 
-#statusbar { position: absolute; left: 56px; right: 56px; top: 22px; height: 20px; }
+#statusbar { position: absolute; left: 56px; right: 56px; top: 22px; height: 20px; pointer-events: none; }
 .sb-left { font-size: 15px; font-weight: bold; }
 .sb-right { position: absolute; right: 0; top: 0; font-size: 12px; color: rgba(255,255,255,0.85); }
 
-#clock { text-align: center; margin-bottom: 20px; }
+#clock { text-align: center; margin-bottom: 20px; pointer-events: none; }
 #clock .time { font-size: 80px; font-weight: bold; letter-spacing: -2px; line-height: 84px; }
 #clock .date { font-size: 15px; color: rgba(255,255,255,0.72); }
 
-#widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; }
+#widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; pointer-events: none; }
 
-/* 液态玻璃：半透明底 + 渐变高光（decorator）+ 背景模糊 + 圆角裁剪 */
+/* 液态玻璃：半透明冷色底 + 渐变高光（decorator）+ 背景模糊 + 圆角裁剪 */
 .card {
-  background-color: rgba(255,255,255,0.14);
-  decorator: linear-gradient(155deg, rgba(255,255,255,0.34), rgba(255,255,255,0.06) 38%, rgba(255,255,255,0.02) 62%, rgba(255,255,255,0.20));
+  position: relative;
+  pointer-events: auto;             /* 组件默认可拦截；容器已声明 none，故显式恢复 */
+  background-color: rgba(150,185,255,0.10);
+  decorator: linear-gradient(160deg, rgba(255,255,255,0.50) 0%, rgba(255,255,255,0.14) 12%, rgba(255,255,255,0.04) 45%, rgba(255,255,255,0.02) 66%, rgba(255,255,255,0.30) 100%);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.34);
-  border-radius: 26px;
+  border-color: rgba(255,255,255,0.30);
+  border-top-color: rgba(255,255,255,0.72);
+  border-bottom-color: rgba(255,255,255,0.18);
+  border-radius: 28px;
   backdrop-filter: blur(14px) saturate(150%);
-  box-shadow: 0 16px 40px rgba(0,0,0,0.38);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.45);
+}
+
+/* specular 高光：卡片顶部的亮线（显式元素；不加 overflow，避免逐绘制 clip mask） */
+.sheen {
+  position: absolute;
+  left: 26px; right: 26px; top: 1px; height: 2px;
+  pointer-events: none;
+  background-color: rgba(255,255,255,0.85);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }

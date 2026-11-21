@@ -257,6 +257,10 @@ namespace CuRmlGUI.Native
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_set_mouse_cursor(IntPtr ctx, int cursor);
 
+        /// <summary>查询 (x,y) 处是否命中可交互元素（遵循 CSS pointer-events）。</summary>
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern int wg_should_block_input(IntPtr ctx, float x, float y);
+
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_free_string(IntPtr p);
     }

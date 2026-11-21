@@ -256,6 +256,12 @@ WG_API void wg_key_up(WG_Context* ctx, int key, int mods);
 WG_API void wg_text_input(WG_Context* ctx, uint32_t codepoint);
 WG_API void wg_set_mouse_cursor(WG_Context* ctx, int cursor);
 
+/* ---- 输入命中测试 ----
+ * 返回 (x,y) 处是否命中可交互元素（遵循 CSS pointer-events：
+ *   元素/祖先 pointer-events:none 且没有子元素重新启用 → 不命中 → 放行）。
+ * 命中 → 1（默认拦截）；未命中 → 0（放行）。 */
+WG_API int wg_should_block_input(WG_Context* ctx, float x, float y);
+
 /* ---- 字符串释放（C++ malloc 的，C# 调用释放） ---- */
 WG_API void wg_free_string(char* p);
 

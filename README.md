@@ -1,305 +1,109 @@
 # CuRmlGUI
 
-给 CU（Casualties: Unknown）模组开发者用的 **HTML/CSS UI 组件库**。
+给 CU（Casualties: Unknown）模组用的 **HTML/CSS UI 库**。
 
-用 RML/RCSS（RmlUi 的 HTML/CSS 方言）定义组件与样式，由重编译的 **RmlUi 6.3**
-原生运行时解析与布局，**SkiaSharp** 光栅化/合成，再经 Unity 纹理桥接到
-IMGUI（`GUI.DrawTexture`）呈现。**只做渲染，绝不执行 JavaScript。**
+用 RML/RCSS（RmlUi 的 HTML/CSS 方言）写界面，由重编译的 **RmlUi 6.3** 解析与布局，
+**SkiaSharp** 光栅化/合成，再经 Unity 纹理桥接到 IMGUI 呈现。
+**只做渲染，绝不执行 JavaScript。**
 
 本插件是「库模组」：默认不注入任何 UI，只负责初始化原生运行时与字体，
-供其他模组通过 `WebGuiView` 使用。
+供其他模组通过 `WebGuiView` 使用。仓库内的 `LiquidGlassDemo` 是一个可选的
+iOS 风格「液态玻璃」演示页（配置段仍沿用旧的 `[Spike]` 名称以兼容旧配置）。
+
+| 文档 | 读者 | 内容 |
+| --- | --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 研究者 / 维护者 | 架构声明：分层、ABI、渲染语义、坐标系、性能模型、设计取舍 |
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | 下游模组开发者 | 接口用法：生命周期、输入、毛玻璃、自定义滤镜、事件、坑 |
+| [docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md) | 研究者 | 与 RmlUi 官方后端相比仍缺的能力清单 |
 
 ---
 
 ## 特性
 
-- **HTML/CSS 语义**：`<div>`/`<button>`/`<input>`、`position: absolute`、
-  `margin/padding/border-radius`、`:hover/:active`、`rgba()`、`overflow: hidden`
-  裁剪等，全部由 RmlUi 原生实现。
-- **零 JS**：RmlUi 不包含脚本引擎；交互通过 C# 侧的事件回调转发。
-- **精确渲染**：RmlUi 每帧 `Render()` 吐出几何，Skia `DrawVertices` 合成，
-  预乘/反预乘与 Y 轴（flipY）在离屏测试中逐像素断言过。
-- **按需渲染**：RmlUi 6.3 的 `Context::Update()` 无条件返回 `true`，因此脏状态由
-  `WebGuiView` 自行维护；无输入、无动画、无 backdrop 更新时**不重绘也不上传纹理**。
-- **毛玻璃（`backdrop-filter`）**：CSS `backdrop-filter: blur(Npx)` 对注入的游戏画面
-  做模糊，且模糊只作用于元素区域（+3σ 上下文），成本 O(元素) 而非 O(视口)。
-  两种实现可选：**Real**（Skia 高斯，观感真实）/ **Fake**（超低采样 + 双线性放大，
-  成本≈0，观感更"假"）。
-- **中文开箱即用**：随插件发行 `Liberation Sans`（Latin）与 Unifont CJK 子集
-  回退字体，字形按需回退，无需用户安装字体。
+- **HTML/CSS 语义**：`<div>`/`<button>`/`<input>`、`position:absolute`、
+  `margin/padding/border-radius`、`:hover/:active`、`rgba()`、`overflow:hidden`、
+  `display:flex`（含 `flex-wrap`）等，由 RmlUi 原生实现。
+- **零 JS**：RmlUi 不含脚本引擎；交互经 C# 事件回调转发。
+- **按 RmlUi 官方后端语义实现渲染接口**：scissor、clip mask（圆角裁剪）、
+  离屏图层、`filter`/`backdrop-filter`、`mask-image`、渐变 shader、变换矩阵，
+  逐条对齐 `RmlUi_Renderer_GL3` 的语义（用 Skia 的等价能力实现）。
+- **真毛玻璃**：`backdrop-filter` 对注入的游戏画面做模糊，并按 `border-radius` 裁剪；
+  默认使用**伪模糊**（1/2 降采样 + 盒式加权平均 + 双线性放大，不调用高斯），
+  成本极低；可切换为 `Real`（Skia 高斯）。
+- **按需渲染**：无输入、无动画、无 backdrop 更新时不重绘、不上传纹理；
+  `MaxRenderFps` 同时约束输入/hover 与动画的重绘频率。
+- **中文开箱即用**：随插件发行 Liberation Sans（Latin）与 Unifont CJK 子集回退字体。
 
-## 用法（给模组开发者）
+## 快速开始
 
 ```csharp
 using CuRmlGUI;
 
-var view = new WebGuiView(1280, 720);   // 创建 RmlUi 上下文 + 离屏合成器
-WebGuiFonts.LoadDefault(view);          // 加载随插件发行的字体（Latin + CJK 回退）
-view.LoadDocument("<rml><body><div id='hello'>你好</div></body></rml>", css);
+var view = new WebGuiView(1280, 720);      // RmlUi 上下文 + 离屏 Skia 合成器
+WebGuiFonts.LoadDefault(view);             // 加载随插件发行的字体
+view.LoadDocument(
+    "<rml><body><div id='hello'>你好</div></body></rml>",
+    "#hello { color: #fff; font-size: 20px; }");
 
 view.ElementEvent += (type, id) => Debug.Log($"event {type} / {id}");
-view.SetElementText("hello", "更新后的文本");   // 通过 RmlUi DOM 回写元素内容
 
-// 每帧（主线程）：
-view.Update();                              // 有变化才重绘并上传纹理
-Graphics.DrawTexture(rect, view.Texture);   // IMGUI 呈现
+// 每帧（主线程）
+view.Update();                             // 有变化才重绘并上传纹理
+GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), view.Texture);
 ```
 
-### 输入（坐标：左上原点）
+输入转发、毛玻璃抓屏、自定义滤镜、输入拦截等见
+[docs/INTEGRATION.md](docs/INTEGRATION.md)。
 
-```csharp
-view.MouseMove(x, y);
-view.MouseDown(x, y, button);
-view.MouseUp(x, y, button);
-view.MouseWheel(dx, dy);
-view.KeyDown(keyCode, modifiers);   // KeyCode → RmlUi 键标识
-view.KeyUp(keyCode, modifiers);
-view.TextInputCodepoint(cp);        // Unicode 码点
+## 构建
+
+前置：VS Community（MSVC）+ CMake + Windows SDK，.NET SDK，Python（字体子集化，可选）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\fetch-rmlui.ps1   # 拉取 pinned 依赖
+powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1  # native/out/Release/WebGUINative.dll
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build # 托管 + 部署到游戏
 ```
 
-### 毛玻璃 / `backdrop-filter`
+> `build-native.ps1` 在 freetype 弃用警告下可能误退出；可直接调用
+> `cmake --build native\build --config Release`。
 
-CSS 侧照常写：
+离屏自检（进游戏前验证渲染）：见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#离屏自检)。
 
-```css
-#glass {
-  background: rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(14px);
-}
-```
+## 演示页与配置
 
-背景侧需要把「玻璃后面的游戏画面」注入合成器——它是 `backdrop-filter` 的**模糊源**，
-**不会被绘进最终输出**（backdrop 永不进入呈现纹理，因此不会以低分辨率副本覆盖
-Unity 自己的渲染）：
-
-```csharp
-// rgba 为 top-down 行序的 RGBA 字节；destW/destH 是该图在视口中铺满的逻辑区域
-view.SetBackdrop(rgba, srcW, srcH, 0, 0, screenW, screenH);
-view.ClearBackdrop();              // 不需要时清除
-```
-
-实现要点（性能）：
-
-- **区域受限模糊**：RmlUi 对 `backdrop-filter` 会设置 `scissor = 元素包围盒 + 溢出`，
-  scissor 之外的合成结果随后被裁剪丢弃，因此快照与滤镜只作用于「scissor + Σ滤镜
-  外扩」，成本从 O(视口) 降到 O(元素)。σ=14 时 500×450 区域模糊约 **1.7 ms**。
-- 无 scissor、或滤镜链含 `mask`（需全图对齐）时退回全视口路径。
-- 抓屏建议节流 + 降采样（spike 用 15 fps、1/4 分辨率）。
-
-### backdrop 从哪来：必须抓最终 framebuffer
-
-游戏的画面分两层：**世界**（相机渲染）与**游戏自己的 UI**（`ScreenSpace-Overlay` Canvas，
-在**所有相机之后**才绘制进 framebuffer）。毛玻璃要模糊的是"你看到的那一层"，所以两
-层都得在。
-
-因此抓屏用 `ScreenCapture.CaptureScreenshotAsTexture()` 拿最终 framebuffer，而不是
-"复制一台相机渲染到 RT"——后者只能拿到世界层，玻璃后面会是黑屏（游戏 UI 全丢）。
-
-代价是抓到的画面里也有**我们自己画的 UI**（IMGUI / Overlay Canvas）。若不排除，玻璃
-面板会把**自己的上一帧**当作模糊源 → 自我模糊反馈：颜色不断向外扩散、越来越不透明、
-与真实背景脱节。
-
-**排除自己的做法是 alpha 蒙版剔除，不是隐藏帧。**按自己 UI 的 alpha 蒙版找出被覆盖
-的像素，用最近的干净像素（BFS 由外向内扩散）填充，填充接缝随后被模糊抹平。
-
-```
-ExcludeOwnUi(backdrop, dw, dh)：
-  1. 一次性 memcpy 自己的 UI 位图（Marshal.Copy，避免逐像素指针读）
-  2. 按 alpha > 8 建蒙版；位图行序可能是 top-down 或 bottom-up，两种都判定取并集
-     （宁可多剔除镜像区，也不能漏掉自己的 UI）
-  3. 与干净像素相邻的被覆盖像素播种 → BFS 向内扩散 → 回填最近的干净像素
-```
-
-**为什么不用"隐藏几帧再抓"**：隐藏帧会直接呈现在屏幕上。按 15 fps 抓屏计算要隐藏
-20%+ 的画面帧，表现为整个 UI 持续闪烁，且低帧率下无法保证两次隐藏之间的可见间隙。
-蒙版剔除不隐藏任何帧，代价只在 CPU 上（一次 memcpy + BFS），已用逐帧采样验证 UI
-区域 259/259 帧完全稳定、0 帧异常。
-
-### 两种模糊模式：Real / Fake
-
-```csharp
-view.BackdropBlurMode = BackdropBlurMode.Real;   // 默认：Skia 高斯模糊
-view.BackdropBlurMode = BackdropBlurMode.Fake;   // 伪模糊：不执行任何模糊算法
-```
-
-| | Real | Fake |
-| --- | --- | --- |
-| 算法 | Skia `CreateBlur`（IIR 高斯） | **无**，靠纹理放大 |
-| 模糊来自 | 卷积核 | 超低采样率 backdrop 被双线性放大 |
-| 过渡曲线 | 高斯平滑衰减 | 线性、宽度≈降采样除数，有轻微阶梯感 |
-| 成本 | 随元素面积增长（500×450 ≈1.7 ms） | ≈0（只多一次低分辨率采样） |
-| 还原 CSS 观感 | 是 | 否（更糊、更"假"） |
-
-**Fake 的原理与调参**：把抓屏降采样除数调大（`Spike.FakeBlurScale`，默认 16），
-合成时把这 120×67 的图直接拉伸铺满元素区域，双线性插值天然产生柔和过渡。
-**等效模糊半径 ≈ 降采样除数（像素）**，所以 `FakeBlurScale` 同时就是"模糊强度"旋钮。
-它不是高斯模糊：过渡是线性的，且缺少高频衰减，边缘纹理会有 16px 尺度的阶梯感。
-
-> 双线性放大发生在 Skia 合成时（`FilterQuality.Low`）。之所以不"交给 Unity 拉伸"，
-> 是因为 backdrop 必须先与半透明面板背景混合、再与整张 UI 一起上传成一个纹理；
-> 单独让 Unity 拉伸会破坏这层合成。采样数学与 Unity 的双线性完全相同。
-
-Fake 只影响 **backdrop 链**（source = 基座图层）上的 `blur()`；普通
-`filter: blur()`（source 是元素自己的离屏图层）仍走真实模糊。
-
-## Spike overlay 配置
-
-开发用 spike 覆盖层（默认关闭）用于联调全链路，配置文件
-`BepInEx/config/com.cu.curmlgui.cfg` 的 `[Spike]` 段：
+`LiquidGlassDemo`（`src/Presentation/LiquidGlassDemo.cs`）是可选的演示页：
+iOS 控制中心式两列玻璃卡片、渐变高光、真毛玻璃、圆角裁剪、表单控件。
+配置位于 `BepInEx/config/com.cu.curmlgui.cfg` 的 `[Spike]` 段（历史名称）：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `Enabled` | `false` | 启用 spike 覆盖层 |
+| `Enabled` | `false` | 启用演示页 |
 | `AutoShow` | `false` | 启动即显示（免按键，供自动化截图） |
 | `ToggleKey` | `F1` | 显隐按键 |
 | `DpiScale` | `1` | dp→px 比例 |
 | `Backdrop` | `false` | 抓屏注入 backdrop（毛玻璃模糊源） |
-| `BackdropBlur` | `Real` | `Real` 高斯 / `Fake` 伪模糊（低采样放大） |
-| `FakeBlurScale` | `16` | Fake 模式的抓屏降采样除数（≈等效模糊半径，越大越糊越省） |
+| `BackdropBlur` | `Fake` | `Fake` 伪模糊（默认）/ `Real` Skia 高斯 |
+| `FakeBlurScale` | `2` | Fake 的抓屏降采样除数（盒式平均） |
+| `FakeBlurRadius` | `6` | Fake 在降采样分辨率上的盒式平滑半径 |
 
-启用毛玻璃演示：`Enabled = true`、`AutoShow = true`、`Backdrop = true`，
-玻璃面板 `#glass` 会显示背后游戏画面的模糊效果。
+## 性能
 
-实测（1920×1080，15 fps 抓屏、按需渲染、ScreenCapture 抓最终 framebuffer；
-抓屏发生在自己 IMGUI 绘制之前，画面天然不含自己 UI，无需蒙版剔除）：
+实测（游戏内 1920×1080、演示页玻璃全开、伪模糊）：
 
-| 模式 | 抓屏 | 渲染（均摊） | 说明 |
-| --- | --- | --- | --- |
-| Real（1/2 抓屏） | ≈1 ms/帧 | ≈5 ms/帧 | Skia 高斯模糊；数值随场景/硬件波动 |
-| Fake（FakeBlurScale=16） | 更低 | 更低 | 不执行模糊，靠低采样放大近似；观感更“假” |
+| 指标 | 早期实现 | 当前 |
+| --- | --- | --- |
+| 游戏 FPS | ~10 | 50–80（随场景波动） |
+| overlay render（摊销） | 70–125 ms/帧 | 2–4 ms/帧 |
+| capture | 8–17 ms | 1–2 ms |
+| overlay 重绘 | 每帧 | 10–20 fps（与抓屏同频）+ 输入上限 50 fps |
 
-## 架构
-
-```
-RML/RCSS ──► RmlUi 6.3（重编译, /MT, C ABI shim）
-                │ 每帧 Render() 吐出三角形/索引/纹理/裁剪
-                ▼
-           SkiaSharp 1.68.3 合成（SkiaCompositor）
-                │ RGBA32 像素
-                ▼
-           Unity Texture2D（整张 Apply）
-                ▼
-        IMGUI（GUI.DrawTexture）
-```
-
-- **原生 shim**（`native/shim/webgui_shim.cpp`）：纯 C ABI（`const char*`/`void*`/
-  基础类型）。字符串用 C++ `malloc`，托管侧 `wg_free_string` 释放；事件指针仅在
-  回调内有效，托管侧立即拷贝。`/MT` 静态 CRT，不跨 DLL 传 STL。
-- **合成器**（`SkiaCompositor`）：`DrawVertices` 的第二参数是「纹理 × 顶点色」
-  组合模式，必须用 `SKBlendMode.Modulate`（`SrcOver` 会把透明像素画成实心白块）；
-  UV 乘纹理尺寸得到像素坐标；顶点色做反预乘（RmlUi 给的是预乘 0xRRGGBBAA）。
-  Y 轴：Skia top-down 输出、Unity 纹理 bottom-up → 合成器 `flipY` CTM。
-- **呈现层**：IMGUI（`GUI.DrawTexture`）绘制整张纹理。
-- **backdrop**（毛玻璃模糊源）：由 C# 抓屏注入，`SkiaCompositor` 只把它当作
-  `backdrop-filter` 的输入，**永不绘入最终输出**。方向约定：基座保持 flipY
-  （bottom-up），离屏图层用 identity（top-down），`GetSnapshot` 仅在 `_flipY` 时
-  行翻转。
-- **字体**：`wg_load_font` 以 `fallback_face=true` 同时注册族名与回退 → Latin 主族
-  + Unifont CJK 回退（RmlUi 6.3 不支持 `font-family` 列表，整串当单一族名）。
-
-## 构建
-
-前置：VS Community 2026（MSVC 14.51）+ CMake 4.3.1 + Windows SDK 10.0.26100，
-dotnet SDK 8+，Python（字体子集化，可选）。
-
-```powershell
-# 1) 拉取 pinned 依赖（RmlUi 6.3 / FreeType 2.13.3）
-powershell -ExecutionPolicy Bypass -File scripts\fetch-rmlui.ps1
-
-# 2) 编译原生运行时（native/out/Release/WebGUINative.dll）
-powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1
-
-# 3) 编译托管 + 部署到游戏
-powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build
-```
-
-### 离屏自检（进游戏前验证渲染）
-
-```powershell
-dotnet build tools\render-test\render-test.csproj -c Release
-# 必须先把新原生 DLL 拷进 render-test 的输出目录，否则 DllImport 命中旧副本：
-Copy-Item native\out\Release\WebGUINative.dll tools\render-test\bin\Release\net472\ -Force
-cd tools\render-test\bin\Release\net472
-.\render-test.exe WebGUINative.dll out.png C:\Windows\Fonts\segoeui.ttf --family="Segoe UI"
-.\render-test.exe WebGUINative.dll glass.png C:\Windows\Fonts\segoeui.ttf --family="Segoe UI" --flip
-```
-
-- 第一行输出 `ALL CHECKS PASSED`：坐标/颜色/预乘/字形/裁剪/`Modulate` 全部正确。
-- `--flip` 额外跑 `ALL BACKDROP CHECKS PASSED`：backdrop 模糊源方向、边界上下文 clamp、
-  非占位像素不被模糊覆盖（含 flipY 双模式，基座 bottom-up / 离屏图层 top-down 的约定）。
-- `glass.png` 写在**工作目录**，跑之前先 `cd`。
-
-## 示例 mod
-
-`samples/CuRmlGuiSample/` 是一个最小可运行的消费方模组，演示完整的接入流程：
-创建 `WebGuiView` → `WebGuiFonts.LoadDefault` → 加载文档 → 每帧输入转发 +
-`Update()` → `OnGUI` 绘制；按钮点击经 `ElementEvent` 回 C#，再 `SetElementText`
-回写计数。构建后把 `CuRmlGuiSample.dll` 放到 `BepInEx\plugins\CuRmlGuiSample\`
-（CuRmlGUI 已装在 `BepInEx\plugins\CuRmlGUI\`），进游戏即见左上角示例窗口。
-
-## 核心 API
-
-| 成员 | 说明 |
-| --- | --- |
-| `WebGuiView(w, h, dpi=1)` | 一个 RmlUi 上下文 + 离屏 Skia 合成器（`IDisposable`） |
-| `LoadDocument(rml, rcss)` | 载入 RML/RCSS 文档 |
-| `UnloadDocument()` | 卸载当前文档 |
-| `LoadFont(path)` | 加载字体（ttf/otf，`fallback_face=true` 同时注册族名与回退） |
-| `SetElementText(id, text)` | 按元素 id 回写文本内容（HTML 自动转义） |
-| `SetSize(w, h, dpi)` | 更新上下文尺寸/DPI |
-| `Update()` → bool | 推进一帧；按需重绘并上传纹理（见下「按需渲染」） |
-| `SetBackdrop(rgba, srcW, srcH, destX, destY, destW, destH)` | 注入 backdrop（`backdrop-filter` 的模糊源，不进最终输出） |
-| `ClearBackdrop()` | 清除 backdrop |
-| `HasBackdrop` | 是否有 backdrop 注入 |
-| `BackdropBlurMode` | `Real`（Skia 高斯）/ `Fake`（伪模糊：低采样放大，成本≈0） |
-| `Texture` / `Width` / `Height` | 结果纹理（RGBA32）与尺寸 |
-| `MaxRenderFps` | 连续动画的最大重绘帧率（fps，默认 30，0=不限）；输入/文档/backdrop 变更仍立即重绘 |
-| `RegisterFilter(name, arity, builder)` | 注册自定义滤镜（CSS `filter: name(p0 …)`），数值原样传给 builder 构建 `SKImageFilter`；须在 `LoadDocument` 前调用 |
-| `ElementEvent` | 事件：(eventType, elementId)，如 `click`/`mouseover`/`change` |
-| `MouseMove/Down/Up/Wheel` | 鼠标输入（左上原点逻辑像素） |
-| `KeyDown/KeyUp` | 键盘（`KeyCode` → RmlUi 键标识） |
-| `TextInput(char)` / `TextInputCodepoint(uint)` | 文本输入（代理对走码点） |
-| `WebGuiFonts.LatinPath` / `.CjkPath` / `.LoadDefault(view)` | CuRmlGUI 发行字体路径与加载 |
-
-### 按需渲染
-
-RmlUi 6.3 的 `Context::Update()` / `Render()` **无条件返回 `true`**，不再报告脏状态，
-因此 `wg_update != 0` 恒真、会导致每帧都重渲染 + 整张纹理上传。
-
-`WebGuiView` 自行维护脏状态：
-
-- `RequestRender()`（linger 2 帧）在输入、文档/尺寸/文本变更、backdrop 更新时调用；
-- 动画与计时器（滑块箭头、输入光标闪烁、滚动箭头）由 `wg_update_delay`
-  （`Context::GetNextUpdateDelay()`）报告：`<=0` 立即渲染、`>0` 可等待、`INF` 空闲。
-
-**注意**：hover / 布局变更**不**会请求更新（RmlUi 只在动画/滚动/输入计时器路径调
-`RequestNextUpdate`），所以输入方法内部必须自行标记脏——`MouseMove` 还会对未变化的
-坐标去重，避免调用方每帧转发导致每帧重绘。
-
-实测效果（1920×1080，毛玻璃开启）：重绘帧数从 **195/195（100%）** 降到
-**84–86 / 272–276（≈31%，即 15 fps 抓屏节流 + 2 帧 linger 的比例）**，渲染均摊耗时
-10.5 ms/帧 → 2.8–3.0 ms/帧。
-
-## 关键约束（设计决策）
-
-1. **不依赖 CCL / 原生构建**：重编译 RmlUi（MIT），自写 C# 绑定，绕开
-   net8-only 的 RmlUi.Net。
-2. **SkiaSharp 必须用 1.68.3**：2.x 的 net462 资产引用
-   `System.Runtime.InteropServices.RuntimeInformation`，其依赖整套 netstandard 1.x
-   门面（`System.Runtime 4.0.0.0` 等），Unity 的 Mono 一个都没有且无绑定重定向 →
-   无解。1.68.3 仅依赖 `System.Memory`/`System.Buffers`（随插件发行）。
-3. **插件目录依赖解析**：BepInEx 以字节数组载入插件，CLR 只在 Unity `Managed`
-   目录找依赖；`NativeLoader` 首行安装 `AssemblyProbe`（AssemblyResolve）在插件目录
-   解析 `System.Memory`/`System.Buffers`，必须在任何 SkiaSharp 类型被 JIT 前。
-4. **覆盖层挂到插件自己的 GameObject**（`BepInEx_Manager`）：BepInEx Awake 阶段
-   `new GameObject + DontDestroyOnLoad` 会被游戏首个场景加载销毁。
-5. **字体子集化**：CJK 用 `pyftsubset` 子集到 7917 字形（815 KB），Latin 254 字形
-   （44 KB），避免携带 5.3MB 的 Unifont。
+性能设计（区域快照、半分辨率滤镜、图层只清 scissor、surface 分桶等）见
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#性能模型)。
 
 ## 许可
 
 - CuRmlGUI 代码：MIT（见 `LICENSE`）。
-- RmlUi 6.3：MIT（以 RCDATA 资源 id 1000 内嵌在 `WebGUINative.dll`，运行时
-  `wg_license()` 可读）。
+- RmlUi 6.3：MIT（以 RCDATA 资源内嵌在 `WebGUINative.dll`，运行时 `wg_license()` 可读）。
 - FreeType 2.13.3：FTL/GPLv2 双许可，静态链接。
 - Liberation Sans、Unifont：各自开源许可，随插件发行。

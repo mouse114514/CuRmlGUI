@@ -432,6 +432,17 @@ select selectbox option:hover {
 
         // ------------------------------------------------------------------ 输入（坐标：左上原点）
 
+        /// <summary>
+        /// 查询 (x,y) 处是否命中可交互元素（默认拦截游戏输入）。
+        /// 遵循 CSS <c>pointer-events</c>：<c>pointer-events:none</c> 的容器/元素会放行，
+        /// 其子元素若为 <c>auto</c> 仍可命中。这样每个组件都能单独声明是否拦截。
+        /// </summary>
+        public bool ShouldBlockInput(float x, float y)
+        {
+            if (!IsValid) return false;
+            return NativeMethods.wg_should_block_input(_ctx, x, y) != 0;
+        }
+
         public void MouseMove(float x, float y)
         {
             if (!IsValid) return;
