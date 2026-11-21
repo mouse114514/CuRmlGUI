@@ -906,9 +906,16 @@ void wg_set_mouse_cursor(WG_Context* /*ctx*/, int /*cursor*/)
 int wg_should_block_input(WG_Context* ctx, float x, float y)
 {
     if (!ctx || !ctx->ctx) return 0;
-    // RmlUi 的 GetElementAtPoint 已经实现 CSS pointer-events 语义：
-    // 子元素先测；pointer-events:none 的元素返回 nullptr（其子元素仍可命中）。
-    return ctx->ctx->GetElementAtPoint(Vector2f(x, y)) ? 1 : 0;
+
+    Element* el = ctx->ctx->GetElementAtPoint(Vector2f(x, y));
+    if (!el) return 0;
+
+    // Context 根元素（文档容器）不是 UI 组件：它默认 pointer-events:auto 且铺满全屏，
+    // 若把它当成命中目标，会导致“任何时候都拦截”。根元素没有父节点。
+    if (!el->GetParentNode()) return 0;
+
+    // 命中最上层元素的 computed pointer-events：none → 放行；auto（含从卡片继承）→ 拦截。
+    return el->GetComputedValues().pointer_events() == Style::PointerEvents::None ? 0 : 1;
 }
 
 void wg_free_string(char* p)

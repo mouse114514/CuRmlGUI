@@ -90,7 +90,7 @@ namespace CuRmlGUI
                 "默认 2；Real 模式不使用此项。");
 
             _spikeFakeBlurRadius = Config.Bind(
-                "Spike", "FakeBlurRadius", 6,
+                "Spike", "FakeBlurRadius", 12,
                 "Fake 模式下的盒式平滑半径（降采样后的像素）：滑动窗口等权平均，成本与半径无关。" +
                 "实际观感半径 ≈ 该值 × FakeBlurScale。0 表示不额外平滑。");
         }

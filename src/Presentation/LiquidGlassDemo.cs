@@ -744,7 +744,7 @@ namespace CuRmlGUI.Presentation
 ";
 
         private const string PageCss = @"
-body { width: 100%; height: 100%; font-family: __FAMILY__; }
+body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none; }
 #page {
   width: 100%; height: 100%;
   display: flex; flex-direction: column;
@@ -763,20 +763,20 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; }
 
 #widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; pointer-events: none; }
 
-/* 液态玻璃：中性半透明底 + 5 段渐变高光 + 背景模糊 + 圆角 */
+/* 液态玻璃：中心通透，仅边缘有 specular 高光与厚度 */
 .card {
-  pointer-events: auto;             /* 组件默认可拦截；容器已声明 none，故显式恢复 */
-  background-color: rgba(255,255,255,0.10);
+  pointer-events: auto;             /* 组件默认可拦截；容器/body 已声明 none */
+  background-color: rgba(255,255,255,0.05);
   decorator: linear-gradient(180deg,
       rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.16) 3%,
-      rgba(255,255,255,0.03) 12%,
-      rgba(255,255,255,0.00) 45%,
-      rgba(255,255,255,0.10) 100%);
+      rgba(255,255,255,0.12) 2%,
+      rgba(255,255,255,0.00) 9%,
+      rgba(255,255,255,0.00) 91%,
+      rgba(255,255,255,0.16) 100%);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.55);
-  border-radius: 28px;
-  backdrop-filter: blur(14px) saturate(150%);
+  border-color: rgba(255,255,255,0.45);
+  border-radius: 30px;
+  backdrop-filter: blur(40px) saturate(180%);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }

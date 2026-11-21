@@ -258,6 +258,7 @@ namespace CuRmlGUI.RenderTest
   <div id=""bs"" class=""card"">shorthand</div>
   <div id=""bb"" class=""card"">border</div>
   <div id=""gh"" class=""card"">hex</div>
+  <div id=""gr"" class=""card"">radial</div>
   <div id=""plain"">plain</div>
 </body>
 </rml>";
@@ -308,6 +309,12 @@ body { width: 100%; height: 100%; background: #000000; font-family: __FAMILY__; 
   left: 210px; top: 210px;
   background-color: #202020;
   decorator: linear-gradient(180deg, #ff00ff 0%, #00ffff 100%);
+}
+
+#gr {
+  left: 210px; top: 210px;
+  background-color: #202020;
+  decorator: radial-gradient(ellipse closest-side, rgba(255,255,255,0.0) 55%, rgba(255,255,255,0.28) 100%);
 }
 
 #plain {
