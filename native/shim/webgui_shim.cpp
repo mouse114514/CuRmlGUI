@@ -396,10 +396,22 @@ public:
             stops.reserve(list.size());
             for (const ColorStop& stop : list)
             {
-                if (stop.position.unit != Unit::NUMBER) continue;
+                // RmlUi 通常已把位置归一化为 NUMBER；这里同时容忍 PERCENT 并做夹紧，
+                // 避免异常位置产生非法渐变（某些实现会退化为整块纯色）。
+                float pos = stop.position.number;
+                if (stop.position.unit == Unit::PERCENT)
+                    pos = (pos > 1.f) ? pos / 100.f : pos;
+                else if (stop.position.unit != Unit::NUMBER)
+                    continue;
+
+                if (pos < 0.f) pos = 0.f;
+                if (pos > 1.f) pos = 1.f;
+                if (!stops.empty() && pos < stops.back().position)
+                    pos = stops.back().position;
+
                 const ColourbPremultiplied c = stop.color;
                 WG_ColorStop s;
-                s.position = stop.position.number;
+                s.position = pos;
                 s.r = c[0] / 255.f;
                 s.g = c[1] / 255.f;
                 s.b = c[2] / 255.f;

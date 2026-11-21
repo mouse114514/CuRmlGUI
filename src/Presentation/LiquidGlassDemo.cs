@@ -763,16 +763,20 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; }
 
 #widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; pointer-events: none; }
 
-/* 液态玻璃：半透明冷色底 + 渐变高光（decorator）+ 背景模糊 + 圆角裁剪 */
+/* 液态玻璃：中性半透明底 + 5 段渐变高光 + 背景模糊 + 圆角 */
 .card {
   pointer-events: auto;             /* 组件默认可拦截；容器已声明 none，故显式恢复 */
-  background-color: rgba(255,255,255,0.08);
-  decorator: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.16) 3%, rgba(255,255,255,0.03) 12%, rgba(255,255,255,0.00) 45%, rgba(255,255,255,0.10) 100%);
+  background-color: rgba(255,255,255,0.10);
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,0.55) 0%,
+      rgba(255,255,255,0.16) 3%,
+      rgba(255,255,255,0.03) 12%,
+      rgba(255,255,255,0.00) 45%,
+      rgba(255,255,255,0.10) 100%);
   border-width: 1px;
   border-color: rgba(255,255,255,0.55);
   border-radius: 28px;
   backdrop-filter: blur(14px) saturate(150%);
-  box-shadow: 0 18px 48px rgba(0,0,0,0.45);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }
@@ -812,6 +816,7 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; }
 .bat-sub { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.70); }
 
 .cc { width: 620px; height: 176px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
+
 .cc-grid { display: flex; }
 .tile { flex: 1; text-align: center; }
 .tile .t-label { margin-left: 6px; font-size: 13px; }

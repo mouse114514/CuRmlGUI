@@ -31,6 +31,20 @@ namespace CuRmlGUI.RenderTest
         private static NativeMethods.GenerateTextureFn s_generate;
         private static NativeMethods.SetScissorFn s_scissor;
         private static NativeMethods.EventFn s_event;
+        private static NativeMethods.PushLayerFn s_push;
+        private static NativeMethods.PopLayerFn s_pop;
+        private static NativeMethods.CompositeLayersFn s_composite;
+        private static NativeMethods.CompileFilterFn s_compileFilter;
+        private static NativeMethods.ReleaseFilterFn s_releaseFilter;
+        private static NativeMethods.SaveLayerAsMaskImageFn s_saveMask;
+        private static NativeMethods.SaveLayerAsTextureFn s_saveTexture;
+        private static NativeMethods.EnableClipMaskFn s_enableMask;
+        private static NativeMethods.RenderToClipMaskFn s_renderMask;
+        private static NativeMethods.SetTransformFn s_transform;
+        private static NativeMethods.CompileShaderFn s_compileShader;
+        private static NativeMethods.RenderShaderFn s_renderShader;
+        private static NativeMethods.ReleaseShaderFn s_releaseShader;
+        private static NativeMethods.LoadTextureFn s_loadTexture;
 
         private const int W = 420;
         private const int H = 320;
@@ -43,6 +57,7 @@ namespace CuRmlGUI.RenderTest
             bool flip = Array.IndexOf(args, "--flip") >= 0;
             bool runVariants = Array.IndexOf(args, "--variants") >= 0;
             bool runReflect = Array.IndexOf(args, "--reflect") >= 0;
+            bool runGlass = Array.IndexOf(args, "--glass") >= 0;
 
             string family = "Unifont";
             string extraFont = @"..\font-probe\out\unifont-17.0.04.otf";
@@ -75,6 +90,45 @@ namespace CuRmlGUI.RenderTest
             s_generate = (u, t, w, h) => { };
             s_scissor = (u, x, y, w, h, en) => s_compositor.SetScissor(x, y, w, h, en != 0);
             s_event = (u, t, id) => Console.WriteLine("EVENT " + Utf8.FromPtr(t) + " / " + Utf8.FromPtr(id));
+            s_push = u => (UIntPtr)(ulong)s_compositor.PushLayer();
+            s_pop = u => s_compositor.PopLayer();
+            s_composite = (u, src, dst, blend, filters, count) =>
+                s_compositor.CompositeLayers((int)src, (int)dst, blend, filters, count);
+            s_compileFilter = (u, name, p) =>
+            {
+                var wp = Marshal.PtrToStructure<WgFilterParams>(p);
+                return (UIntPtr)(ulong)s_compositor.CompileFilter(Utf8.FromPtr(name), ref wp);
+            };
+            s_releaseFilter = (u, f) => s_compositor.ReleaseFilter((int)f);
+            s_saveMask = u => (UIntPtr)(ulong)s_compositor.SaveLayerAsMaskImage();
+            s_saveTexture = u => (UIntPtr)s_compositor.SaveLayerAsTexture();
+            s_enableMask = (u, en) => s_compositor.EnableClipMask(en != 0);
+            s_renderMask = (u, op, v, vc, idx, ic, tx, ty) =>
+                s_compositor.RenderToClipMask(op, v, vc, idx, ic, tx, ty);
+            s_transform = (u, m, identity) =>
+            {
+                if (identity != 0 || m == IntPtr.Zero) { s_compositor.SetTransform(null); return; }
+                var a = new float[16];
+                Marshal.Copy(m, a, 0, 16);
+                s_compositor.SetTransform(a);
+            };
+            s_compileShader = (u, name, fn, px, py, vx, vy, stopPtr, stopCount) =>
+            {
+                var stops = new WgColorStop[Math.Max(0, stopCount)];
+                int size = Marshal.SizeOf(typeof(WgColorStop));
+                for (int i = 0; i < stops.Length; i++)
+                    stops[i] = Marshal.PtrToStructure<WgColorStop>(stopPtr + i * size);
+                return (UIntPtr)(ulong)s_compositor.CompileShader(fn, px, py, vx, vy, stops);
+            };
+            s_renderShader = (u, sh, v, vc, idx, ic, tex, tx, ty) =>
+                s_compositor.RenderShader((int)sh, v, vc, idx, ic, (ulong)tex, tx, ty);
+            s_releaseShader = (u, sh) => s_compositor.ReleaseShader((int)sh);
+            s_loadTexture = (IntPtr u, IntPtr src, out int lw, out int lh) =>
+            {
+                lw = 0;
+                lh = 0;
+                return UIntPtr.Zero;
+            };
 
             s_ctx = NativeMethods.wg_context_create(W, H, 1f);
             if (s_ctx == IntPtr.Zero)
@@ -85,6 +139,14 @@ namespace CuRmlGUI.RenderTest
 
             NativeMethods.wg_set_render_callbacks(s_ctx, IntPtr.Zero,
                 s_draw, s_create, s_destroy, s_generate, s_scissor);
+            NativeMethods.wg_set_layer_callbacks(s_ctx, IntPtr.Zero,
+                s_compileFilter, s_releaseFilter, s_push, s_pop,
+                s_composite, s_saveMask, s_saveTexture);
+            NativeMethods.wg_set_clip_mask_callbacks(s_ctx, IntPtr.Zero, s_enableMask, s_renderMask);
+            NativeMethods.wg_set_transform_callback(s_ctx, IntPtr.Zero, s_transform);
+            NativeMethods.wg_set_shader_callbacks(s_ctx, IntPtr.Zero,
+                s_compileShader, s_renderShader, s_releaseShader);
+            NativeMethods.wg_set_load_texture_callback(s_ctx, IntPtr.Zero, s_loadTexture);
             NativeMethods.wg_set_event_callback(s_ctx, IntPtr.Zero, s_event);
 
             if (File.Exists(font))
@@ -99,8 +161,8 @@ namespace CuRmlGUI.RenderTest
                     " (" + extraFont + ")");
             }
 
-            string css = Css.Replace("__FAMILY__", family);
-            if (!wg_load_document_mem(s_ctx, Rml, css))
+            string css = (runGlass ? GlassCss : Css).Replace("__FAMILY__", family);
+            if (!wg_load_document_mem(s_ctx, runGlass ? GlassRml : Rml, css))
             {
                 Console.Error.WriteLine("load_document failed");
                 return 4;
@@ -125,6 +187,8 @@ namespace CuRmlGUI.RenderTest
                 data.SaveTo(fs);
 
             Console.WriteLine("wrote " + Path.GetFullPath(outPng) + " (" + s_compositor.Width + "x" + s_compositor.Height + ")");
+
+            if (runGlass) return 0;
 
             var bmp = s_compositor.Bitmap;
 
@@ -183,6 +247,74 @@ namespace CuRmlGUI.RenderTest
 
         private static bool wg_load_document_mem(IntPtr ctx, string rml, string css) =>
             NativeMethods.wg_load_document(ctx, Utf8.ToNullTerminated(rml), Utf8.ToNullTerminated(css)) != 0;
+
+        private const string GlassRml = @"
+<rml>
+<head>
+</head>
+<body>
+  <div id=""g5"" class=""card"">5stop</div>
+  <div id=""g2"" class=""card"">2stop</div>
+  <div id=""bs"" class=""card"">shorthand</div>
+  <div id=""bb"" class=""card"">border</div>
+  <div id=""gh"" class=""card"">hex</div>
+  <div id=""plain"">plain</div>
+</body>
+</rml>";
+
+        private const string GlassCss = @"
+body { width: 100%; height: 100%; background: #000000; font-family: __FAMILY__; font-size: 14px; color: #ffffff; }
+.card { position: absolute; width: 180px; height: 80px; border-radius: 16px; }
+
+/* 5 段、带百分比的半透明渐变（目标写法） */
+#g5 {
+  left: 10px; top: 10px;
+  background-color: rgba(255, 0, 0, 0.6);
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,0.55) 0%,
+      rgba(255,255,255,0.16) 3%,
+      rgba(255,255,255,0.03) 12%,
+      rgba(255,255,255,0.00) 45%,
+      rgba(255,255,255,0.10) 100%);
+  border-width: 1px;
+  border-color: rgba(255,255,255,0.65);
+}
+
+/* 2 段渐变（对照组） */
+#g2 {
+  left: 210px; top: 10px;
+  background-color: rgba(0, 255, 0, 0.6);
+  decorator: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.0) 100%);
+  border-width: 1px;
+  border-color: rgba(255,255,255,0.65);
+}
+
+/* border 简写（含 solid） */
+#bs {
+  left: 10px; top: 110px;
+  background-color: #ff00ff;
+  border: 4px solid #00ff00;
+}
+
+/* border 长写 */
+#bb {
+  left: 210px; top: 110px;
+  background-color: #00ffff;
+  border-width: 4px;
+  border-color: #ffffff;
+}
+
+#gh {
+  left: 210px; top: 210px;
+  background-color: #202020;
+  decorator: linear-gradient(180deg, #ff00ff 0%, #00ffff 100%);
+}
+
+#plain {
+  position: absolute; left: 10px; top: 210px;
+  width: 180px; height: 60px;
+  background-color: #ffff00;
+}";
 
         private const string Rml = @"
 <rml>
