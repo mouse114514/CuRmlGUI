@@ -474,7 +474,7 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 /* 液态玻璃：GPU 玻璃层负责模糊/圆角；RmlUi 只画文字、边框与高光 */
 .card {
   pointer-events: auto;             /* 组件默认可拦截；容器/body 已声明 none */
-  background-color: rgba(255,255,255,0.05);
+  background-color: #ffffff;        /* 白色面板背景（控件样式不受影响） */
   decorator: linear-gradient(180deg,
       rgba(255,255,255,0.55) 0%,
       rgba(255,255,255,0.12) 2%,
