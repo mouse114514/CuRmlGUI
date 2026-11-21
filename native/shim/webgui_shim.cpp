@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,64 @@
 #include "webgui_shim.h"
 
 using namespace Rml;
+
+// ------------------------------------------------------------------ 通用滤镜
+// 供托管侧注册自定义效果：CSS 写 `filter: <name>(p0 p1 ... pN-1)`，
+// 数值经 CompileFilter 回调转发到托管侧（WG_FilterParams::custom_values）。
+class GenericFilter : public Filter
+{
+public:
+    String name;
+    Vector<float> values;
+
+    CompiledFilter CompileFilter(Element* element) const override
+    {
+        Dictionary params;
+        for (int i = 0; i < (int)values.size(); i++)
+            params[CreateString("p%d", i)] = Variant(values[i]);
+        return element->GetRenderManager()->CompileFilter(name, params);
+    }
+};
+
+class GenericFilterInstancer : public FilterInstancer
+{
+public:
+    explicit GenericFilterInstancer(int arity) : arity(arity)
+    {
+        String names;
+        ids.reserve(arity);
+        for (int i = 0; i < arity; i++)
+        {
+            const String pname = CreateString("p%d", i);
+            ids.push_back(RegisterProperty(pname, "0").AddParser("number").GetId());
+            if (i) names += ", ";
+            names += pname;
+        }
+        if (!names.empty())
+            RegisterShorthand("filter", names, ShorthandType::FallThrough);
+    }
+
+    SharedPtr<Filter> InstanceFilter(const String& name, const PropertyDictionary& properties) override
+    {
+        auto filter = MakeShared<GenericFilter>();
+        filter->name = name;
+        filter->values.reserve(arity);
+        for (PropertyId id : ids)
+        {
+            const Property* p = properties.GetProperty(id);
+            filter->values.push_back(p ? p->Get<float>() : 0.f);
+        }
+        return filter;
+    }
+
+private:
+    int arity;
+    Vector<PropertyId> ids;
+};
+
+// 进程级持有（RmlUi 的 Factory 是全局的，注册后名称一直有效；不释放，避免悬空指针）。
+static std::map<std::string, std::unique_ptr<GenericFilterInstancer>> g_custom_filters;
+
 
 // ------------------------------------------------------------------ 回调集合
 struct Callbacks
@@ -167,7 +227,7 @@ public:
     {
         if (!cb || !cb->compile_filter) return 0;
 
-        WG_FilterParams p;
+        WG_FilterParams p = {};
         p.sigma = Rml::Get(parameters, "sigma", 0.f);
         p.value = Rml::Get(parameters, "value", 1.f);
         const Rml::Colourb c = Rml::Get(parameters, "color", Rml::Colourb());
@@ -175,6 +235,24 @@ public:
         const Rml::Vector2f off = Rml::Get(parameters, "offset", Rml::Vector2f(0.f, 0.f));
         p.offset_x = off.x;
         p.offset_y = off.y;
+
+        // 收集自定义滤镜的数值参数 p0..pN（按索引排序，与 arity 顺序一致）。
+        std::map<int, float> custom;
+        for (const auto& kv : parameters)
+        {
+            const String& k = kv.first;
+            if (k.size() < 2 || (k[0] != 'p' && k[0] != 'P')) continue;
+            bool digits = true;
+            for (size_t i = 1; i < k.size(); i++)
+                if (k[i] < '0' || k[i] > '9') { digits = false; break; }
+            if (!digits) continue;
+            custom[std::atoi(k.c_str() + 1)] = kv.second.Get<float>(0.f);
+        }
+        std::vector<float> custom_ordered;
+        custom_ordered.reserve(custom.size());
+        for (const auto& kv : custom) custom_ordered.push_back(kv.second);
+        p.custom_values = custom_ordered.empty() ? nullptr : custom_ordered.data();
+        p.custom_count = (int)custom_ordered.size();
 
         return (CompiledFilterHandle)cb->compile_filter(cb->user, name.c_str(), &p);
     }
@@ -455,6 +533,18 @@ void wg_set_event_callback(WG_Context* ctx, void* user, WG_EventFn on_event)
     if (!ctx) return;
     ctx->cb.event_user = user;
     ctx->cb.on_event = on_event;
+}
+
+void wg_register_filter(WG_Context* ctx, const char* name, int arity)
+{
+    (void)ctx;   // RmlUi 的 Factory 是全局的，注册与具体 context 无关。
+    if (!name || !*name || arity < 0 || arity > 16) return;
+    const std::string key = name;
+    if (g_custom_filters.count(key)) return;   // 已注册，忽略
+    auto instancer = std::make_unique<GenericFilterInstancer>(arity);
+    Factory::RegisterFilterInstancer(name, instancer.get());
+    g_custom_filters[key] = std::move(instancer);
+    fprintf(stderr, "[CuRmlGUI] registered custom filter '%s' (arity=%d)\n", name, arity);
 }
 
 int wg_load_document(WG_Context* ctx, const char* rml, const char* rcss)

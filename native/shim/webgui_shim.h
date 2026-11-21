@@ -81,12 +81,22 @@ typedef struct WG_FilterParams {
     float value;
     float color[4];
     float offset_x, offset_y;
+    /* 自定义滤镜的数值参数（p0..pN），仅本次回调期间有效；
+     * 由 wg_register_filter 注册的滤镜使用，托管侧须立即拷贝。 */
+    const float* custom_values;
+    int custom_count;
 } WG_FilterParams;
 
 /* 编译滤镜：name ∈ {"blur","drop-shadow","brightness","contrast","invert",
- * "grayscale","sepia","saturate","hue-rotate","opacity"}。返回滤镜句柄（>0）。 */
+ * "grayscale","sepia","saturate","hue-rotate","opacity", <自定义已注册滤镜>}。返回滤镜句柄（>0）。 */
 typedef uintptr_t (*WG_CompileFilterFn)(
     void* user, const char* name, const WG_FilterParams* params);
+
+/* 注册一个通用滤镜：CSS 写成 `filter: <name>(p0 p1 ... p_{arity-1})`。
+ * 数值参数原样经 CompileFilter 回调转发（WG_FilterParams::custom_values/count），
+ * 具体效果由托管侧注册的构建函数决定。必须在 wg_load_document 之前调用
+ * （样式解析时需要能查到 instancer）。arity ∈ [0, 16]。重复注册同名忽略。 */
+WG_API void wg_register_filter(WG_Context* ctx, const char* name, int arity);
 
 /* 释放滤镜（CompileFilter 或 SaveLayerAsMaskImage 返回的句柄）。 */
 typedef void (*WG_ReleaseFilterFn)(void* user, uintptr_t filter);

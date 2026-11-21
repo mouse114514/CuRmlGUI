@@ -38,6 +38,26 @@ namespace CuRmlGUI.Render
         private readonly Dictionary<int, FilterEntry> _filters = new Dictionary<int, FilterEntry>();
         private int _nextFilterHandle = 1;
 
+        // ---- 自定义滤镜（托管侧注册，对应 native wg_register_filter）----
+        private readonly Dictionary<string, CustomFilterBuilder> _customFilters =
+            new Dictionary<string, CustomFilterBuilder>(StringComparer.Ordinal);
+
+        /// <summary>登记一个自定义滤镜的构建函数（名称须已通过 native wg_register_filter 注册）。</summary>
+        public void RegisterFilter(string name, CustomFilterBuilder builder)
+        {
+            if (string.IsNullOrEmpty(name) || builder == null) return;
+            _customFilters[name] = builder;
+        }
+
+        /// <summary>把 ABI 里的 custom_values 指针立即拷成托管数组（回调后指针失效）。</summary>
+        private static float[] ReadCustomArgs(ref WgFilterParams p)
+        {
+            if (p.CustomCount <= 0 || p.CustomValues == IntPtr.Zero) return Array.Empty<float>();
+            var arr = new float[p.CustomCount];
+            Marshal.Copy(p.CustomValues, arr, 0, p.CustomCount);
+            return arr;
+        }
+
         private bool _scissorEnabled;
         private SKRect _scissor;
         private bool _dirty = true;
@@ -478,6 +498,21 @@ namespace CuRmlGUI.Render
         /// <summary>编译滤镜。返回滤镜句柄（>0）；不支持的滤镜返回 0。</summary>
         public int CompileFilter(string name, ref WgFilterParams p)
         {
+            // 自定义滤镜优先：名称由托管侧注册，参数经 custom_values 数组传入。
+            if (_customFilters.TryGetValue(name, out var builder))
+            {
+                var result = builder(ReadCustomArgs(ref p));
+                if (result.Filter == null) return 0;
+                int customHandle = _nextFilterHandle++;
+                _filters[customHandle] = new FilterEntry
+                {
+                    Kind = FilterKind.Image,
+                    ImageFilter = result.Filter,
+                    PadPx = result.PadPx,
+                };
+                return customHandle;
+            }
+
             SKImageFilter filter = null;
             SKColorFilter colorFilter = null;
             int pad = 0;

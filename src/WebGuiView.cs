@@ -132,12 +132,13 @@ namespace CuRmlGUI
         /// <summary>
         /// 表单控件默认外观样式（前置到用户 RCSS，用户样式可覆盖）。
         ///
-        /// RmlUi 不内置任何控件外观，只给布局。这里参考官方示例 effects_style.rcss 的纯 CSS
-        /// 写法，给出一套开箱即用的默认外观。range 滑块由三个子元素构成：
-        ///   slidertrack（槽） / sliderprogress（已填充段，track 的子元素） / sliderbar（滑块）。
+        /// RmlUi 不内置任何控件外观，只给布局。这里参考 Zelda64Recomp 的 recomp.rcss 与官方
+        /// effects_style.rcss 的纯 CSS 写法，给出一套开箱即用的默认外观。range 滑块由三个
+        /// 子元素构成：slidertrack（槽）/ sliderprogress（已填充段，track 的子元素）/ sliderbar（滑块）。
         /// 关键约束：这些子元素只能用尺寸 + margin 定位，**不能加 display/position**——否则
         /// SetOffset 只挪动绘制位置、命中盒仍停在流式位置，导致滑块「看得见但拖不动」。
-        /// 几何按输入高度 32px 居中：track 6px（margin-top 13）、thumb 18px（margin-top 7）。
+        /// 几何按输入高度 18px 居中：track 2px（margin-top 8）、thumb 16px（margin-top 1），
+        /// 圆心与轨道中线都在 y9。
         /// </summary>
         private const string DefaultControlsCss = @"
 /* ===== CuRmlGUI 表单控件默认外观 ===== */
@@ -156,36 +157,35 @@ input[type=checkbox]:checked, input[type=radio]:checked {
     border-color: #6ea8ff;
 }
 input[type=range] {
-    height: 32px;
-    vertical-align: -12px;
+    height: 18px;
+    vertical-align: -4px;
 }
 input[type=range] slidertrack {
-    margin-top: 13px;
-    height: 6px;
-    background: #2a3150;
-    border-radius: 3px;
+    height: 2px;
+    margin-top: 8px;
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 1px;
 }
 input[type=range] sliderprogress {
+    height: 2px;
     margin-top: 0px;
-    height: 6px;
     background: #6ea8ff;
-    border-radius: 3px;
+    border-radius: 1px;
 }
 input[type=range] sliderbar {
-    margin-left: -9px;
-    margin-right: -9px;
-    margin-top: 7px;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
+    margin-top: 1px;
+    margin-left: -8px;
+    margin-right: -8px;
+    border-radius: 8px;
     background: #ffffff;
-    border-radius: 9px;
-    border-width: 1px;
-    border-color: #8fb0ff;
 }
+input[type=range] sliderbar:hover { background: #e9f0ff; }
+input[type=range] sliderbar:active { background: #6ea8ff; }
 input[type=range] sliderarrowdec,
 input[type=range] sliderarrowinc {
-    width: 0px;
-    height: 0px;
+    display: none;
 }
 select selectvalue {
     height: 100%;
@@ -214,14 +214,26 @@ select selectbox option:hover {
 }
 ";
 
+        /// <summary>
+        /// 注册一个自定义滤镜：CSS 写 <c>filter: name(p0 p1 ... p_arity-1)</c>，
+        /// 数值原样传给 <paramref name="builder"/> 构建 Skia 图像滤镜。
+        /// 必须在 <see cref="LoadDocument"/> 之前调用（样式解析时需能查到 instancer）。
+        /// </summary>
+        public void RegisterFilter(string name, int arity, CustomFilterBuilder builder)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(name) || builder == null) return;
+            NativeMethods.wg_register_filter(_ctx, Utf8.ToNullTerminated(name), arity);
+            _compositor.RegisterFilter(name, builder);
+        }
+
         public bool LoadDocument(string rml, string rcss = null)
         {
             ThrowIfDisposed();
             bool ok = NativeMethods.wg_load_document(
                 _ctx,
                 Utf8.ToNullTerminated(rml ?? string.Empty),
-                Utf8.ToNullTerminated(DefaultControlsCss + (rcss ?? string.Empty))) != 0;
-            RequestRender();
+                Utf8.ToNullTerminated(DefaultControlsCss + (rcss ?? string.Empty))) != 0;            RequestRender();
             return ok;
         }
 

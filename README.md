@@ -254,6 +254,7 @@ cd tools\render-test\bin\Release\net472
 | `BackdropBlurMode` | `Real`（Skia 高斯）/ `Fake`（伪模糊：低采样放大，成本≈0） |
 | `Texture` / `Width` / `Height` | 结果纹理（RGBA32）与尺寸 |
 | `MaxRenderFps` | 连续动画的最大重绘帧率（fps，默认 30，0=不限）；输入/文档/backdrop 变更仍立即重绘 |
+| `RegisterFilter(name, arity, builder)` | 注册自定义滤镜（CSS `filter: name(p0 …)`），数值原样传给 builder 构建 `SKImageFilter`；须在 `LoadDocument` 前调用 |
 | `ElementEvent` | 事件：(eventType, elementId)，如 `click`/`mouseover`/`change` |
 | `MouseMove/Down/Up/Wheel` | 鼠标输入（左上原点逻辑像素） |
 | `KeyDown/KeyUp` | 键盘（`KeyCode` → RmlUi 键标识） |

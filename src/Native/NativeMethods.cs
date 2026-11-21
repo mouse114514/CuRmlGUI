@@ -26,6 +26,9 @@ namespace CuRmlGUI.Native
         public float Value;
         public float ColorR, ColorG, ColorB, ColorA;
         public float OffsetX, OffsetY;
+        /// <summary>自定义滤镜数值参数（p0..pN）指针，仅回调期间有效。</summary>
+        public IntPtr CustomValues;
+        public int CustomCount;
     }
 
     /// <summary>
@@ -133,6 +136,10 @@ namespace CuRmlGUI.Native
 
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_set_event_callback(IntPtr ctx, IntPtr user, EventFn onEvent);
+
+        /// <summary>注册一个通用滤镜（CSS：<c>filter: name(p0 p1 ...)</c>）。须在 LoadDocument 前调用。</summary>
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_register_filter(IntPtr ctx, byte[] name, int arity);
 
         // ------------------------------------------------------------------ 文档 / 尺寸 / 字体
         [DllImport(Dll, CallingConvention = Cc)]
