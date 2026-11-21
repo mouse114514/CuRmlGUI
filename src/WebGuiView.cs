@@ -132,13 +132,12 @@ namespace CuRmlGUI
         /// <summary>
         /// 表单控件默认外观样式（前置到用户 RCSS，用户样式可覆盖）。
         ///
-        /// RmlUi 只内置基础元素的 display，不提供 checkbox/radio/slider 等控件的视觉外观：
-        /// 这些控件（或它们的子元素）没有样式时只显示标签文字。这里给出一套通用默认外观，
-        /// 让控件开箱即用。其中 range 滑块由三个子元素构成：
-        ///   slidertrack（槽） / sliderprogress（已填充段） / sliderbar（滑块）。
-        /// 关键约束：这些子元素只能用 margin 定位，**不能加 display/position**——否则
+        /// RmlUi 不内置任何控件外观，只给布局。这里参考官方示例 effects_style.rcss 的纯 CSS
+        /// 写法，给出一套开箱即用的默认外观。range 滑块由三个子元素构成：
+        ///   slidertrack（槽） / sliderprogress（已填充段，track 的子元素） / sliderbar（滑块）。
+        /// 关键约束：这些子元素只能用尺寸 + margin 定位，**不能加 display/position**——否则
         /// SetOffset 只挪动绘制位置、命中盒仍停在流式位置，导致滑块「看得见但拖不动」。
-        /// 几何按输入高度 32px 调校（track 22px → margin-top 3；thumb 23px → margin-top -3）。
+        /// 几何按输入高度 32px 居中：track 6px（margin-top 13）、thumb 18px（margin-top 7）。
         /// </summary>
         private const string DefaultControlsCss = @"
 /* ===== CuRmlGUI 表单控件默认外观 ===== */
@@ -161,30 +160,44 @@ input[type=range] {
     vertical-align: -12px;
 }
 input[type=range] slidertrack {
-    margin-top: 3px;
-    height: 22px;
+    margin-top: 13px;
+    height: 6px;
     background: #2a3150;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 input[type=range] sliderprogress {
-    margin-top: 8px;
-    height: 7px;
+    margin-top: 0px;
+    height: 6px;
     background: #6ea8ff;
     border-radius: 3px;
 }
 input[type=range] sliderbar {
-    margin-left: -8px;
-    margin-right: -7px;
-    margin-top: -3px;
-    width: 22px;
-    height: 23px;
+    margin-left: -9px;
+    margin-right: -9px;
+    margin-top: 7px;
+    width: 18px;
+    height: 18px;
     background: #ffffff;
-    border-radius: 11px;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: #8fb0ff;
 }
 input[type=range] sliderarrowdec,
 input[type=range] sliderarrowinc {
     width: 0px;
     height: 0px;
+}
+select selectvalue {
+    height: 100%;
+    padding: 0px 8px;
+    line-height: 26px;
+}
+select selectarrow {
+    width: 22px;
+    height: 100%;
+    background: #1a2140;
+    border-left-width: 1px;
+    border-left-color: #3a4166;
 }
 select selectbox {
     background: #10142a;
