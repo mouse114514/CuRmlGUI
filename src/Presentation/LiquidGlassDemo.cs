@@ -474,16 +474,20 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 /* 液态玻璃：GPU 玻璃层负责模糊/圆角；RmlUi 只画文字、边框与高光 */
 .card {
   pointer-events: auto;             /* 组件默认可拦截；容器/body 已声明 none */
-  background-color: rgba(255,255,255,0.22);  /* 更透的白（透出玻璃） */
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.50) 0%,      /* 顶部亮白（渐变层次） */
-      rgba(255,255,255,0.18) 18%,
-      rgba(255,255,255,0.00) 55%,     /* 中间透出玻璃 */
-      rgba(255,255,255,0.00) 88%,
-      rgba(255,255,255,0.08) 100%);   /* 底部微光 */
+  background-color: rgba(255,255,255,0.12);        /* 玻璃 tint（半透明） */
+  decorator: linear-gradient(135deg,
+      rgba(255,255,255,0.28) 0%,      /* 左上角斜向光泽（sheen） */
+      rgba(255,255,255,0.06) 30%,
+      rgba(255,255,255,0.00) 58%);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.45);
+  border-color: rgba(255,255,255,0.22);            /* 玻璃边缘 */
   border-radius: 30px;
+  box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.55),       /* 顶部边缘高光（最亮） */
+      inset 0 -1px 1px rgba(255,255,255,0.28),      /* 底部边缘高光 */
+      inset 1px 0 1px rgba(255,255,255,0.18),       /* 左边缘 */
+      inset -1px 0 1px rgba(255,255,255,0.18),      /* 右边缘 */
+      0 8px 24px rgba(0,0,0,0.28);                  /* 外阴影（浮起） */
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }
