@@ -31,12 +31,38 @@ namespace CuRmlGUI.Render
         // ---- 图层栈（[0] = 基座，句柄 0；其余为离屏 surface）----
         private readonly List<Layer> _layerStack = new List<Layer>();
         private readonly Dictionary<int, Layer> _layerMap = new Dictionary<int, Layer>();
-        private readonly Stack<PooledSurface> _surfacePool = new Stack<PooledSurface>();
+        private readonly Dictionary<long, Stack<PooledSurface>> _surfacePool =
+            new Dictionary<long, Stack<PooledSurface>>();
         private int _nextLayerHandle = 1;
 
         // ---- 滤镜（含 mask）----
         private readonly Dictionary<int, FilterEntry> _filters = new Dictionary<int, FilterEntry>();
         private int _nextFilterHandle = 1;
+
+        // ---- 渐变 shader（CompileShader / RenderShader）----
+        private readonly Dictionary<int, SKShader> _shaders = new Dictionary<int, SKShader>();
+        private int _nextShaderHandle = 1;
+
+        // ---- 纹理 shader 缓存（文字使用同一图集，避免每帧重复创建 shader）----
+        private readonly Dictionary<ulong, SKShader> _textureShaders = new Dictionary<ulong, SKShader>();
+
+        private SKShader GetTextureShader(ulong texture, SKImage image)
+        {
+            if (_textureShaders.TryGetValue(texture, out var shader) && shader != null)
+                return shader;
+            shader = image.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+            _textureShaders[texture] = shader;
+            return shader;
+        }
+
+        private void InvalidateTextureShader(ulong texture)
+        {
+            if (_textureShaders.TryGetValue(texture, out var shader))
+            {
+                shader?.Dispose();
+                _textureShaders.Remove(texture);
+            }
+        }
 
         // ---- 自定义滤镜（托管侧注册，对应 native wg_register_filter）----
         private readonly Dictionary<string, CustomFilterBuilder> _customFilters =
@@ -61,6 +87,53 @@ namespace CuRmlGUI.Render
         private bool _scissorEnabled;
         private SKRect _scissor;
         private bool _dirty = true;
+
+        // ---- 当前变换（对应官方后端的 `transform`：只作用于带几何句柄的绘制）----
+        private SKMatrix _transform = SKMatrix.MakeIdentity();
+
+        // ---- 裁剪遮罩（clip mask：border-radius / overflow 圆角 / clip）----
+        // 语义对齐官方 GL3 后端的 stencil 实现（RenderInterface_GL3::RenderToClipMask）：
+        //   Set        → 清空后写入几何覆盖区
+        //   SetInverse → 清空为「满」后擦除几何覆盖区（即保留几何之外）
+        //   Intersect  → 与现有遮罩求交
+        // Skia 没有 stencil，这里用一张与视口同尺寸的 alpha 位图等价表达：
+        // 像素 alpha = 覆盖度，绘制时以 DstIn 把内容乘上遮罩。
+        private bool _clipMaskEnabled;
+        private bool _clipMaskValid;
+        private SKBitmap _clipMaskBitmap;
+        private SKCanvas _clipMaskCanvas;
+        private SKImage _clipMaskImage;   // FromPixels 缓存（共享位图，不拷贝）；遮罩变更时失效
+
+        // ---- 性能统计（诊断用；TakeStats 读取后清零）----
+        private long _stDraw, _stComposite, _stMask, _stLayer, _stSnapshot, _stFilter;
+        private int _cDraw, _cComposite, _cMask, _cLayer;
+        private int _cSnapshotFull, _cSnapshotRegion;
+        private long _statSnapshotArea, _statFilterArea;
+        private int _cFilterPass;
+        private int _lastRegionW, _lastRegionH, _lastFilterW, _lastFilterH;
+
+        /// <summary>取一份渲染分项耗时（毫秒）与调用次数，然后清零。</summary>
+        public string TakeStats()
+        {
+            double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            long avgRegion = _cSnapshotRegion > 0 ? _statSnapshotArea / _cSnapshotRegion : 0;
+            long avgFilter = _cFilterPass > 0 ? _statFilterArea / _cFilterPass : 0;
+            string s = string.Format(
+                "draw {0:F2}ms x{1} | composite {2:F2}ms x{3} [snapshot {4:F2}, filter {5:F2}] | mask {6:F2}ms x{7} | layers {8:F2}ms x{9} | snapshots full {10} region {11} (avg {12}px, last {13}x{14}) | filter {15} pass avg {16}px last {17}x{18} | textures {19}",
+                _stDraw * toMs, _cDraw,
+                _stComposite * toMs, _cComposite,
+                _stSnapshot * toMs, _stFilter * toMs,
+                _stMask * toMs, _cMask,
+                _stLayer * toMs, _cLayer,
+                _cSnapshotFull, _cSnapshotRegion, avgRegion, _lastRegionW, _lastRegionH,
+                _cFilterPass, avgFilter, _lastFilterW, _lastFilterH, _textures.Count);
+            _stDraw = _stComposite = _stMask = _stLayer = _stSnapshot = _stFilter = 0;
+            _cDraw = _cComposite = _cMask = _cLayer = 0;
+            _cSnapshotFull = _cSnapshotRegion = 0;
+            _statSnapshotArea = _statFilterArea = 0;
+            _cFilterPass = 0;
+            return s;
+        }
 
         // ---- backdrop（游戏像素，绘制在基座最底层）----
         private SKImage _backdrop;
@@ -106,13 +179,18 @@ namespace CuRmlGUI.Render
         }
 
         private enum FilterKind { Image, Mask }
+        private enum FilterSubKind { ColorMatrix, Blur, DropShadow, Custom, Mask }
 
         private sealed class FilterEntry
         {
             public FilterKind Kind;
+            public FilterSubKind SubKind;
             public SKImageFilter ImageFilter;   // Image
             public SKColorFilter ColorFilter;   // Image（保持存活，配合 CreateColorFilter）
             public SKImage MaskImage;           // Mask
+            /// <summary>重建低分辨率滤镜所需的原始参数。</summary>
+            public float Sigma, OffsetX, OffsetY;
+            public SKColor ShadowColor;
             /// <summary>
             /// 该滤镜需要额外读取/写入的上下文像素（模糊、阴影会溢出源边界）。
             /// 用于把滤镜计算限制在「元素区域 + Pad」内，避免对整张视口图做滤镜。
@@ -136,7 +214,9 @@ namespace CuRmlGUI.Render
 
             // 清空图层栈与池（跨帧不应有活动图层，防御性重置）。
             while (_layerStack.Count > 1) PopLayer();
-            while (_surfacePool.Count > 0) _surfacePool.Pop().Surface.Dispose();
+            foreach (var kv in _surfacePool)
+                while (kv.Value.Count > 0) kv.Value.Pop().Surface.Dispose();
+            _surfacePool.Clear();
 
             _canvas?.Dispose();
             _bitmap?.Dispose();
@@ -175,6 +255,10 @@ namespace CuRmlGUI.Render
         {
             _canvas.Clear(SKColors.Transparent);
             _scissorEnabled = false;
+            _transform = SKMatrix.MakeIdentity();
+            // 遮罩只在一帧内有效；RmlUi 会在需要时用 Set/SetInverse 重新建立。
+            _clipMaskEnabled = false;
+            _clipMaskValid = false;
             _dirty = true;
         }
 
@@ -245,10 +329,12 @@ namespace CuRmlGUI.Render
 
             if (_textures.TryGetValue(id, out var old)) old.Dispose();
             _textures[id] = image;
+            InvalidateTextureShader(id);
         }
 
         public void DestroyTexture(ulong id)
         {
+            InvalidateTextureShader(id);
             if (_textures.TryGetValue(id, out var img))
             {
                 img.Dispose();
@@ -279,13 +365,207 @@ namespace CuRmlGUI.Render
             }
         }
 
+        // ------------------------------------------------------------------ 变换（对应 RenderInterface::SetTransform）
+
+        /// <summary>
+        /// 设置当前变换。参数为 RmlUi Matrix4f 的 column-major 16 个 float（null = identity）。
+        /// 只作用于 <see cref="DrawGeometry"/> 与 <see cref="RenderToClipMask"/>，
+        /// 不影响 scissor 与 <see cref="CompositeLayers"/>（与官方后端一致）。
+        /// </summary>
+        public void SetTransform(float[] m)
+        {
+            if (m == null || m.Length < 16)
+            {
+                _transform = SKMatrix.MakeIdentity();
+                return;
+            }
+
+            // column-major: m[0..3]=col0, m[4..7]=col1, m[8..11]=col2, m[12..15]=col3。
+            // Skia 的行向量约定：ScaleX=m00, SkewX=m01, TransX=m03; SkewY=m10, ScaleY=m11, TransY=m13。
+            _transform = new SKMatrix
+            {
+                ScaleX = m[0],
+                SkewX = m[4],
+                TransX = m[12],
+                SkewY = m[1],
+                ScaleY = m[5],
+                TransY = m[13],
+                Persp0 = 0f,
+                Persp1 = 0f,
+                Persp2 = 1f,
+            };
+        }
+
+        // ------------------------------------------------------------------ 裁剪遮罩（clip mask）
+
+        /// <summary>启用/停用裁剪遮罩。启用后，所有带几何的绘制与图层合成都只保留遮罩内像素。</summary>
+        public void EnableClipMask(bool enable)
+        {
+            _clipMaskEnabled = enable;
+            _dirty = true;
+        }
+
+        /// <summary>
+        /// 把一段几何栅格化进裁剪遮罩。
+        /// </summary>
+        /// <param name="operation">0=Set（清空后写入） 1=SetInverse（保留几何之外） 2=Intersect（求交）。</param>
+        public unsafe void RenderToClipMask(
+            int operation,
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            float translateX, float translateY)
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            EnsureClipMaskSurface();
+            if (vertexCount <= 0) return;
+
+            var vp = (WgVertex*)vertices;
+            using (var path = new SKPath())
+            {
+                int triCount = indexCount > 0 ? indexCount : vertexCount;
+                int* ip = (int*)indices;
+                for (int t = 0; t + 2 < triCount; t += 3)
+                {
+                    int i0 = indexCount > 0 ? ip[t + 0] : t + 0;
+                    int i1 = indexCount > 0 ? ip[t + 1] : t + 1;
+                    int i2 = indexCount > 0 ? ip[t + 2] : t + 2;
+                    if (i0 < 0 || i1 < 0 || i2 < 0
+                        || i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount)
+                        continue;
+
+                    WgVertex v0 = vp[i0], v1 = vp[i1], v2 = vp[i2];
+                    path.MoveTo(v0.X + translateX, v0.Y + translateY);
+                    path.LineTo(v1.X + translateX, v1.Y + translateY);
+                    path.LineTo(v2.X + translateX, v2.Y + translateY);
+                    path.Close();
+                }
+
+                using (var paint = new SKPaint { IsAntialias = true, Color = SKColors.White })
+                {
+                    // 清空/铺满只做几何包围盒（∩ scissor），避免每帧擦整张视口。
+                    var bounds = path.Bounds;
+                    bounds.Inflate(2f, 2f);
+                    var limit = _scissorEnabled ? _scissor : new SKRect(0, 0, Width, Height);
+                    bounds.Intersect(limit);
+
+                    switch (operation)
+                    {
+                        case 1:   // SetInverse：先把包围盒铺满，再擦掉几何区
+                            if (!bounds.IsEmpty)
+                            {
+                                using (var fill = new SKPaint { Color = SKColors.White, BlendMode = SKBlendMode.Src })
+                                    _clipMaskCanvas.DrawRect(bounds, fill);
+                            }
+                            paint.BlendMode = SKBlendMode.Clear;
+                            break;
+                        case 2:   // Intersect：现有遮罩 × 新几何覆盖度
+                            paint.BlendMode = SKBlendMode.DstIn;
+                            break;
+                        default:  // Set：清空包围盒后写入几何区
+                            if (!bounds.IsEmpty)
+                            {
+                                using (var clear = new SKPaint { Color = SKColors.Transparent, BlendMode = SKBlendMode.Src })
+                                    _clipMaskCanvas.DrawRect(bounds, clear);
+                            }
+                            paint.BlendMode = SKBlendMode.SrcOver;
+                            break;
+                    }
+
+                    // 与 RenderGeometry 相同：先平移（已含在顶点里），再乘 transform。
+                    _clipMaskCanvas.Save();
+                    if (!_transform.IsIdentity)
+                        _clipMaskCanvas.Concat(ref _transform);
+                    _clipMaskCanvas.DrawPath(path, paint);
+                    _clipMaskCanvas.Restore();
+                }
+            }
+
+            _clipMaskImage?.Dispose();
+            _clipMaskImage = null;
+            _clipMaskValid = true;
+            _stMask += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            _cMask++;
+            _dirty = true;
+        }
+
+        /// <summary>当前是否需要在绘制前建立遮罩层。</summary>
+        private bool BeginMaskedDraw(SKCanvas canvas)
+        {
+            if (!_clipMaskEnabled || !_clipMaskValid || _clipMaskBitmap == null) return false;
+            canvas.SaveLayer();
+            return true;
+        }
+
+        /// <summary>用 DstIn 把本层内容乘上遮罩，然后还原遮罩层。</summary>
+        private void EndMaskedDraw(SKCanvas canvas)
+        {
+            var mask = GetClipMaskImage();
+            if (mask == null) { canvas.Restore(); return; }
+            using (var paint = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                canvas.DrawImage(mask, 0, 0, paint);
+            canvas.Restore();
+        }
+
+        private void EnsureClipMaskSurface()
+        {
+            if (_clipMaskBitmap != null && _clipMaskBitmap.Width == Width && _clipMaskBitmap.Height == Height)
+                return;
+
+            _clipMaskImage?.Dispose();
+            _clipMaskImage = null;
+            _clipMaskCanvas?.Dispose();
+            _clipMaskCanvas = null;
+            _clipMaskBitmap?.Dispose();
+
+            var info = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            _clipMaskBitmap = new SKBitmap(info);
+            _clipMaskCanvas = new SKCanvas(_clipMaskBitmap);
+            _clipMaskCanvas.Clear(SKColors.Transparent);
+            _clipMaskValid = false;
+        }
+
+        /// <summary>遮罩位图 → SKImage（共享像素，不拷贝）。</summary>
+        private SKImage GetClipMaskImage()
+        {
+            if (_clipMaskImage == null && _clipMaskBitmap != null)
+            {
+                var info = new SKImageInfo(
+                    _clipMaskBitmap.Width, _clipMaskBitmap.Height,
+                    SKColorType.Rgba8888, SKAlphaType.Premul);
+                _clipMaskImage = SKImage.FromPixels(info, _clipMaskBitmap.GetPixels());
+            }
+            return _clipMaskImage;
+        }
+
         public unsafe void DrawGeometry(
             IntPtr vertices, int vertexCount,
             IntPtr indices, int indexCount,
             ulong texture, float translateX, float translateY)
         {
-            if (vertexCount <= 0) return;
+            DrawVertexData(vertices, vertexCount, indices, indexCount, texture, null, translateX, translateY);
+        }
 
+        /// <summary>用已编译的渐变 shader 绘制几何（对应官方 RenderShader 的 Gradient 分支）。</summary>
+        public void RenderShader(
+            int shader, IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            ulong texture, float translateX, float translateY)
+        {
+            if (!_shaders.TryGetValue(shader, out var gradient) || gradient == null) return;
+            DrawVertexData(vertices, vertexCount, indices, indexCount, texture, gradient, translateX, translateY);
+        }
+
+        private unsafe void DrawVertexData(
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            ulong texture, SKShader gradientShader,
+            float translateX, float translateY)
+        {
+            if (vertexCount <= 0) return;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            // 注意：必须使用**精确长度**的数组。SKVertices.CreateCopy 会按数组长度
+            // 读取顶点/索引，复用更大的缓冲会把旧数据一起提交，导致整屏几何错乱。
             var positions = new SKPoint[vertexCount];
             var texs = new SKPoint[vertexCount];
             var colors = new SKColor[vertexCount];
@@ -293,8 +573,9 @@ namespace CuRmlGUI.Render
             // RmlUi 的 UV 是归一化 [0,1]，而 Skia 的图片 shader 在顶点路径里
             // 按「纹理像素坐标」采样（等价于 shader 局部矩阵为单位矩阵）。
             // 所以这里把 UV 乘上纹理尺寸，得到像素坐标。
+            // 渐变 shader 例外：它的坐标系就是 UV（元素局部坐标），不能缩放。
             SKImage texImage = null;
-            bool hasTex = texture != 0 && _textures.TryGetValue(texture, out texImage);
+            bool hasTex = gradientShader == null && texture != 0 && _textures.TryGetValue(texture, out texImage);
             float texW = 1f, texH = 1f;
             if (hasTex)
             {
@@ -327,12 +608,19 @@ namespace CuRmlGUI.Render
                 sv = SKVertices.CreateCopy(SKVertexMode.Triangles, positions, texs, colors, idx);
 
                 paint = new SKPaint { IsAntialias = false };
-                if (hasTex)
-                    paint.Shader = texImage.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+                if (gradientShader != null)
+                    paint.Shader = gradientShader;
+                else if (hasTex)
+                    paint.Shader = GetTextureShader(texture, texImage);
 
                 var canvas = CurrentCanvas;
                 canvas.Save();
                 if (_scissorEnabled) canvas.ClipRect(_scissor, SKClipOperation.Intersect, false);
+                // 遮罩层建立在「窗口坐标系」（不受 transform 影响），因为遮罩位图本身就是
+                // 窗口坐标。transform 只包住几何绘制。
+                bool masked = BeginMaskedDraw(canvas);
+                canvas.Save();
+                if (!_transform.IsIdentity) canvas.Concat(ref _transform);
                 // 关键：DrawVertices 的第二个参数是「纹理 × 顶点色」的**组合**模式，
                 // 而不是与画布的输出混合模式（输出混合由 paint.BlendMode 负责，默认 SrcOver）。
                 //   SrcOver = texture over vertexColor → 纹理透明处会露出不透明的顶点色
@@ -340,11 +628,15 @@ namespace CuRmlGUI.Render
                 //   Modulate = texture * vertexColor → 正确：透明保持透明，顶点色作为着色。
                 canvas.DrawVertices(sv, SKBlendMode.Modulate, paint);
                 canvas.Restore();
+                if (masked) EndMaskedDraw(canvas);
+                canvas.Restore();
             }
             finally
             {
                 paint?.Dispose();
                 sv?.Dispose();
+                _stDraw += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+                _cDraw++;
             }
         }
 
@@ -353,7 +645,19 @@ namespace CuRmlGUI.Render
         /// <summary>推入新离屏图层（identity CTM，top-down 存储）。返回图层句柄（>0）。</summary>
         public int PushLayer()
         {
-            var ps = AcquireSurface(Width, Height);
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            // 官方语义：新图层只需在**当前 scissor 区域**内为透明黑。
+            // 复用池化 surface 时不再整张 8.7MB 清空，只清 scissor 区域。
+            var ps = AcquireSurface(Width, Height, clear: false);
+            if (_scissorEnabled)
+            {
+                using (var paint = new SKPaint { Color = SKColors.Transparent, BlendMode = SKBlendMode.Src })
+                    ps.Surface.Canvas.DrawRect(_scissor, paint);
+            }
+            else
+            {
+                ps.Surface.Canvas.Clear(SKColors.Transparent);
+            }
             var layer = new Layer
             {
                 Handle = _nextLayerHandle++,
@@ -364,6 +668,8 @@ namespace CuRmlGUI.Render
             };
             _layerStack.Add(layer);
             _layerMap[layer.Handle] = layer;
+            _stLayer += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            _cLayer++;
             _dirty = true;
             return layer.Handle;
         }
@@ -372,6 +678,7 @@ namespace CuRmlGUI.Render
         public void PopLayer()
         {
             if (_layerStack.Count <= 1) return;   // 基座不可弹
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             var layer = _layerStack[_layerStack.Count - 1];
             _layerStack.RemoveAt(_layerStack.Count - 1);
             _layerMap.Remove(layer.Handle);
@@ -383,6 +690,8 @@ namespace CuRmlGUI.Render
             });
             layer.Surface = null;
             layer.Canvas = null;
+            _stLayer += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            _cLayer++;
             _dirty = true;
         }
 
@@ -400,31 +709,70 @@ namespace CuRmlGUI.Render
             var src = GetLayer(source);
             var dst = GetLayer(destination);
             if (src == null || dst == null) return;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
 
             float dx = 0, dy = 0;
             // 伪模糊：跳过 backdrop 链上的 blur（source==基座 即 backdrop 所在图层）。
             // 普通 filter: blur() 的 source 是元素自己的离屏图层，不受影响。
             bool skipBlur = BackdropBlurMode == BackdropBlurMode.Fake && _backdrop != null && source == 0;
 
-            SKImage snapshot;
-            if (filterCount > 0 && _scissorEnabled && !ChainHasMask(filters, filterCount))
+            // 无滤镜：源图层快照是 copy-on-write，直接按 scissor 裁剪画到目标，
+            // 不需要「取区域快照 → 再画」的中间 surface（backdrop 第二步就走这里）。
+            if (filterCount == 0 && src.Surface != null)
             {
-                int pad = ComputeFilterPadding(filters, filterCount, skipBlur);
-                var region = ClampToViewport(new SKRect(
-                    _scissor.Left - pad, _scissor.Top - pad,
-                    _scissor.Right + pad, _scissor.Bottom + pad));
-                snapshot = GetSnapshotRegion(src, region);
+                using (var snap = src.Surface.Snapshot())
+                using (var paint = new SKPaint())
+                {
+                    if (blendMode == 1) paint.BlendMode = SKBlendMode.Src;   // Replace
+                    var canvas = dst.Canvas;
+                    canvas.Save();
+                    if (_scissorEnabled) canvas.ClipRect(_scissor, SKClipOperation.Intersect, false);
+                    bool masked = BeginMaskedDraw(canvas);
+                    canvas.DrawImage(snap, 0, 0, paint);
+                    if (masked) EndMaskedDraw(canvas);
+                    canvas.Restore();
+                }
+                _stComposite += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+                _cComposite++;
+                _dirty = true;
+                return;
+            }
+
+            SKImage snapshot;
+            long tSnap = System.Diagnostics.Stopwatch.GetTimestamp();
+            float rw = Width, rh = Height;
+            float preScale = 1f;
+            if (_scissorEnabled && !ChainHasMask(filters, filterCount))
+            {
+                // 只要 scissor 有效就按区域取快照 —— 包括「无滤镜」的合成
+                // （例如 backdrop 的第二步：把已模糊的临时层贴回元素图层）。
+                // 原实现仅在 filterCount>0 时走区域路径，导致每帧多次整视口快照。
+                //
+                // 注意：不要在这里再加滤镜 padding。RmlUi 的 ApplyScissorRegionForBackdrop /
+                // ApplyClippingRegion 已经把 ink overflow（模糊/阴影外扩）算进 scissor 了；
+                // 再按 sigma*3 加一圈会让区域大 ~1.5 倍，而 Skia CPU 模糊成本正比于面积。
+                var region = ClampToViewport(_scissor);
+                int area = Math.Max(1, (int)region.Width) * Math.Max(1, (int)region.Height);
+                preScale = FilterPreScale(filters, filterCount, skipBlur, area);
+                // 大区域模糊直接在半分辨率上取快照，省掉全分辨率表面与二次缩小。
+                int downscale = preScale < 0.75f ? 2 : 1;
+                snapshot = GetSnapshotRegion(src, region, downscale);
                 dx = (float)region.Left;
                 dy = (float)region.Top;
+                rw = region.Width;
+                rh = region.Height;
             }
             else
             {
                 snapshot = GetSnapshot(src);
             }
+            _stSnapshot += System.Diagnostics.Stopwatch.GetTimestamp() - tSnap;
 
             using (snapshot)
             {
-                var filtered = ApplyFilters(snapshot, filters, filterCount, skipBlur);
+                long tFilter = System.Diagnostics.Stopwatch.GetTimestamp();
+                var filtered = ApplyFilters(snapshot, filters, filterCount, skipBlur, preScale, out _);
+                _stFilter += System.Diagnostics.Stopwatch.GetTimestamp() - tFilter;
                 try
                 {
                     using (var paint = new SKPaint())
@@ -433,7 +781,10 @@ namespace CuRmlGUI.Render
                         var canvas = dst.Canvas;
                         canvas.Save();
                         if (_scissorEnabled) canvas.ClipRect(_scissor, SKClipOperation.Intersect, false);
-                        canvas.DrawImage(filtered, dx, dy, paint);
+                        bool masked = BeginMaskedDraw(canvas);
+                        // 滤镜可能以半分辨率计算（preScale=0.5），这里统一拉伸到目标区域。
+                        canvas.DrawImage(filtered, new SKRect(dx, dy, dx + rw, dy + rh), paint);
+                        if (masked) EndMaskedDraw(canvas);
                         canvas.Restore();
                     }
                 }
@@ -442,6 +793,8 @@ namespace CuRmlGUI.Render
                     if (!ReferenceEquals(filtered, snapshot)) filtered.Dispose();
                 }
             }
+            _stComposite += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            _cComposite++;
             _dirty = true;
         }
 
@@ -470,18 +823,23 @@ namespace CuRmlGUI.Render
             return false;
         }
 
-        /// <summary>累加滤镜链所需的外扩像素（模糊/阴影会溢出元素边界）。</summary>
-        private int ComputeFilterPadding(IntPtr filters, int filterCount, bool skipBlur)
+        /// <summary>
+        /// 决定滤镜链的计算分辨率：仅「大区域 + 模糊/阴影」降到 0.5（面积 /4）。
+        /// 小元素保持全分辨率；含 mask 的链必须全图对齐，不降。
+        /// </summary>
+        private float FilterPreScale(IntPtr filters, int filterCount, bool skipBlur, int area)
         {
-            int pad = 0;
+            if (area < 40000) return 1f;
             for (int i = 0; i < filterCount; i++)
             {
-                int handle = ReadFilterHandle(filters, i);
-                if (!_filters.TryGetValue(handle, out var e)) continue;
-                if (skipBlur && e.IsBlur) continue;   // 伪模糊不执行，无需外扩
-                pad += e.PadPx;
+                int h = ReadFilterHandle(filters, i);
+                if (!_filters.TryGetValue(h, out var e)) continue;
+                if (e.Kind == FilterKind.Mask) return 1f;
+                if (!(skipBlur && e.IsBlur)
+                    && (e.SubKind == FilterSubKind.Blur || e.SubKind == FilterSubKind.DropShadow))
+                    return 0.5f;
             }
-            return pad;
+            return 1f;
         }
 
         private SKRect ClampToViewport(SKRect r)
@@ -491,6 +849,117 @@ namespace CuRmlGUI.Render
             if (rr < l) rr = l;
             if (b < t) b = t;
             return new SKRect(l, t, rr, b);
+        }
+
+        // ------------------------------------------------------------------ Shader（gradient）
+
+        /// <summary>
+        /// 编译渐变 shader（对应官方 GL3::CompileShader 的 Gradient 分支）。
+        /// functionType: 0=Linear 1=Radial 2=Conic 3=RepeatingLinear 4=RepeatingRadial 5=RepeatingConic。
+        /// 渐变坐标系 = 顶点 UV（元素局部坐标）；颜色为预乘 RGBA（0..1）。
+        /// </summary>
+        public int CompileShader(
+            int functionType, float pX, float pY, float vX, float vY,
+            WgColorStop[] stops)
+        {
+            if (stops == null || stops.Length == 0) return 0;
+
+            var colors = new SKColor[stops.Length];
+            var positions = new float[stops.Length];
+            for (int i = 0; i < stops.Length; i++)
+            {
+                WgColorStop s = stops[i];
+                colors[i] = UnpremultiplyColor(s.R, s.G, s.B, s.A);
+                positions[i] = s.Position;
+            }
+
+            SKShader shader = null;
+            try
+            {
+                bool repeating = functionType >= 3;
+                var tile = repeating ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp;
+                var p = new SKPoint(pX, pY);
+
+                switch (functionType)
+                {
+                    case 0:   // linear
+                    case 3:   // repeating linear
+                        shader = SKShader.CreateLinearGradient(
+                            p, new SKPoint(pX + vX, pY + vY), colors, positions, tile);
+                        break;
+
+                    case 1:   // radial（椭圆：把单位圆按 1/radius 缩放）
+                    case 4:   // repeating radial
+                    {
+                        var m = new SKMatrix
+                        {
+                            ScaleX = vX,
+                            SkewX = 0f,
+                            TransX = -vX * pX,
+                            SkewY = 0f,
+                            ScaleY = vY,
+                            TransY = -vY * pY,
+                            Persp0 = 0f,
+                            Persp1 = 0f,
+                            Persp2 = 1f,
+                        };
+                        shader = SKShader.CreateRadialGradient(
+                            new SKPoint(0f, 0f), 1f, colors, positions, tile, m);
+                        break;
+                    }
+
+                    case 2:   // conic
+                    case 5:   // repeating conic
+                    {
+                        // RmlUi: t = 0.5 + atan2(-Vx, Vy)/2π，V = Rot(-angle(v))·(uv-p)。
+                        // 化简后 t 在「12 点方向」为 0、顺时针增长。
+                        float deg = (float)(Math.Atan2(vY, vX) * 180.0 / Math.PI);
+                        shader = SKShader.CreateSweepGradient(
+                            p, colors, positions, tile, deg - 90f, deg + 270f);
+                        break;
+                    }
+
+                    default:
+                        return 0;
+                }
+
+                if (shader == null) return 0;
+
+                int handle = _nextShaderHandle++;
+                _shaders[handle] = shader;
+                shader = null;   // 所有权移交给字典
+                return handle;
+            }
+            finally
+            {
+                shader?.Dispose();
+            }
+        }
+
+        public void ReleaseShader(int handle)
+        {
+            if (_shaders.TryGetValue(handle, out var shader))
+            {
+                shader?.Dispose();
+                _shaders.Remove(handle);
+            }
+        }
+
+        /// <summary>预乘浮点 RGBA（0..1）→ 非预乘 SKColor。</summary>
+        private static SKColor UnpremultiplyColor(float r, float g, float b, float a)
+        {
+            if (a <= 0f) return new SKColor(0, 0, 0, 0);
+            if (a < 1f)
+            {
+                r = Math.Min(1f, r / a);
+                g = Math.Min(1f, g / a);
+                b = Math.Min(1f, b / a);
+            }
+            return new SKColor(
+                (byte)Math.Round(r * 255f),
+                (byte)Math.Round(g * 255f),
+                (byte)Math.Round(b * 255f),
+                (byte)Math.Round(a * 255f));
         }
 
         // ------------------------------------------------------------------ 滤镜
@@ -507,6 +976,7 @@ namespace CuRmlGUI.Render
                 _filters[customHandle] = new FilterEntry
                 {
                     Kind = FilterKind.Image,
+                    SubKind = FilterSubKind.Custom,
                     ImageFilter = result.Filter,
                     PadPx = result.PadPx,
                 };
@@ -517,6 +987,8 @@ namespace CuRmlGUI.Render
             SKColorFilter colorFilter = null;
             int pad = 0;
             bool isBlur = false;
+            FilterSubKind subKind = FilterSubKind.ColorMatrix;
+            SKColor shadowColor = SKColors.Black;
 
             switch (name)
             {
@@ -526,17 +998,20 @@ namespace CuRmlGUI.Render
                         filter = SKImageFilter.CreateBlur(p.Sigma, p.Sigma, null, null);
                         pad = (int)Math.Ceiling(p.Sigma * 3);
                         isBlur = true;
+                        subKind = FilterSubKind.Blur;
                     }
                     break;
 
                 case "drop-shadow":
+                    shadowColor = new SKColor((byte)p.ColorR, (byte)p.ColorG, (byte)p.ColorB, (byte)p.ColorA);
                     filter = SKImageFilter.CreateDropShadow(
                         p.OffsetX, p.OffsetY, p.Sigma, p.Sigma,
-                        new SKColor((byte)p.ColorR, (byte)p.ColorG, (byte)p.ColorB, (byte)p.ColorA),
+                        shadowColor,
                         SKDropShadowImageFilterShadowMode.DrawShadowAndForeground,
                         null, null);
                     // 阴影向外溢出 |offset| + 3σ。
                     pad = (int)Math.Ceiling(Math.Abs(p.OffsetX) + Math.Abs(p.OffsetY) + p.Sigma * 3);
+                    subKind = FilterSubKind.DropShadow;
                     break;
 
                 case "opacity":
@@ -566,8 +1041,13 @@ namespace CuRmlGUI.Render
             _filters[handle] = new FilterEntry
             {
                 Kind = FilterKind.Image,
+                SubKind = subKind,
                 ImageFilter = filter,
                 ColorFilter = colorFilter,
+                Sigma = p.Sigma,
+                OffsetX = p.OffsetX,
+                OffsetY = p.OffsetY,
+                ShadowColor = shadowColor,
                 PadPx = pad,
                 IsBlur = isBlur,
             };
@@ -593,21 +1073,79 @@ namespace CuRmlGUI.Render
             if (top == null) return 0;
             var img = GetSnapshot(top);
             int handle = _nextFilterHandle++;
-            _filters[handle] = new FilterEntry { Kind = FilterKind.Mask, MaskImage = img };
+            _filters[handle] = new FilterEntry { Kind = FilterKind.Mask, SubKind = FilterSubKind.Mask, MaskImage = img };
             return handle;
         }
 
-        /// <summary>把当前图层存为纹理（后续经 RenderGeometry 绘制）。返回纹理句柄（>0）。</summary>
+        /// <summary>
+        /// 把当前图层存为纹理（对应官方 GL3::SaveLayerAsTexture）。
+        /// 官方按 **当前 scissor 区域** 截取，纹理尺寸 = scissor 尺寸；这里保持一致。
+        /// </summary>
         public ulong SaveLayerAsTexture()
         {
             var top = GetTopLayer();
             if (top == null) return 0;
-            var img = GetSnapshot(top);
+
+            SKRect region = _scissorEnabled
+                ? ClampToViewport(_scissor)
+                : new SKRect(0, 0, Width, Height);
+            if (region.Width < 1f || region.Height < 1f) return 0;
+
+            var img = GetRawRegionSnapshot(top, region);
+            if (img == null) return 0;
+
             // 用纹理句柄空间存储；RmlUi 后续用该句柄在 RenderGeometry 中引用。
-            ulong id = (ulong)(_nextLayerHandle + 1000000);
-            while (_textures.ContainsKey(id)) id++;
+            // 注意必须用**单调递增**句柄：若从固定基址 + 循环探测，长期运行会变成 O(n) 扫描。
+            ulong id = (ulong)(_nextLayerTextureHandle++);
+            while (_textures.ContainsKey(id)) id = (ulong)(_nextLayerTextureHandle++);
             _textures[id] = img;
             return id;
+        }
+
+        private int _nextLayerTextureHandle = 1000000;
+
+        // ------------------------------------------------------------------ 纹理加载（对应 RenderInterface::LoadTexture）
+
+        private int _nextFileTextureHandle = 2000000;
+
+        /// <summary>
+        /// 按路径解码纹理并登记。支持 Skia 能解码的格式（PNG/JPG/TGA/WebP…）。
+        /// RmlUi 传入的是与文档路径拼接后的地址，这里剥掉内存文档的伪协议前缀。
+        /// </summary>
+        public ulong LoadTextureFromFile(string source, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            if (string.IsNullOrEmpty(source)) return 0;
+
+            const string docPrefix = "curmlgui://document";
+            string path = source;
+            if (path.StartsWith(docPrefix, StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(docPrefix.Length).TrimStart('/', '\\');
+
+            if (!System.IO.File.Exists(path)) return 0;
+
+            using (var bmp = SKBitmap.Decode(path))
+            {
+                if (bmp == null || bmp.Width <= 0 || bmp.Height <= 0) return 0;
+
+                using (var conv = bmp.Copy(SKColorType.Rgba8888))
+                {
+                    if (conv == null) return 0;
+
+                    var info = new SKImageInfo(
+                        conv.Width, conv.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                    var img = SKImage.FromPixelCopy(info, conv.GetPixels(), conv.RowBytes);
+                    if (img == null) return 0;
+
+                    int id = _nextFileTextureHandle++;
+                    while (_textures.ContainsKey((ulong)id)) id = _nextFileTextureHandle++;
+                    _textures[(ulong)id] = img;
+                    width = conv.Width;
+                    height = conv.Height;
+                    return (ulong)id;
+                }
+            }
         }
 
         // ------------------------------------------------------------------ 内部
@@ -631,6 +1169,7 @@ namespace CuRmlGUI.Render
         /// </summary>
         private SKImage GetSnapshot(Layer layer)
         {
+            _cSnapshotFull++;
             if (layer.Surface != null) return layer.Surface.Snapshot();
 
             // 基座
@@ -659,14 +1198,22 @@ namespace CuRmlGUI.Render
         /// 与 <see cref="GetSnapshot"/> 不同：不整张拷贝/行翻转，成本正比于区域面积，
         /// 供区域受限的滤镜路径使用（scissor + 滤镜上下文）。
         /// </summary>
-        private SKImage GetSnapshotRegion(Layer layer, SKRect region)
+        private SKImage GetSnapshotRegion(Layer layer, SKRect region, int downscale = 1)
         {
+            _cSnapshotRegion++;
             int lx = (int)Math.Round(region.Left), ly = (int)Math.Round(region.Top);
             int w = Math.Max(1, (int)Math.Round(region.Right - region.Left));
             int h = Math.Max(1, (int)Math.Round(region.Bottom - region.Top));
-            var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
+            _statSnapshotArea += (long)w * h;
+            _lastRegionW = w;
+            _lastRegionH = h;
 
-            var ps = AcquireSurface(w, h);
+            // downscale=2：直接在半分辨率画布上合成（模糊本来就在这个尺度计算）。
+            int ow = Math.Max(1, w / downscale);
+            int oh = Math.Max(1, h / downscale);
+            var dst = new SKRect(0, 0, ow, oh);
+
+            var ps = AcquireSurface(ow, oh);
             var canvas = ps.Surface.Canvas;
 
             // 1) backdrop（游戏画面）在最底层：取 region 对应的源子矩形画进区域画布。
@@ -681,8 +1228,8 @@ namespace CuRmlGUI.Render
                     float sw = _backdrop.Width * (region.Right - region.Left) / bw;
                     float sh = _backdrop.Height * (region.Bottom - region.Top) / bh;
                     var srcRect = new SKRect(sx, sy, sx + sw, sy + sh);
-                    using (var paint = new SKPaint { FilterQuality = SKFilterQuality.Low })
-                        canvas.DrawImage(_backdrop, srcRect, new SKRect(0, 0, w, h), paint);
+                    using (var paint = new SKPaint { FilterQuality = downscale > 1 ? SKFilterQuality.Medium : SKFilterQuality.Low })
+                        canvas.DrawImage(_backdrop, srcRect, dst, paint);
                 }
             }
 
@@ -690,29 +1237,81 @@ namespace CuRmlGUI.Render
             if (layer.Surface != null)
             {
                 using (var full = layer.Surface.Snapshot())
-                    canvas.DrawImage(full, region, new SKRect(0, 0, w, h), new SKPaint());
+                using (var paint = new SKPaint { FilterQuality = downscale > 1 ? SKFilterQuality.Medium : SKFilterQuality.None })
+                    canvas.DrawImage(full, region, dst, paint);
             }
             else
             {
-                // 基座：bottom-up/flipY 时按行号镜像，只拷区域行。
+                // 基座：共享像素（FromPixels 不拷贝）。基座是 bottom-up，区域内容需要
+                // **在区域内部再翻转一次**（只用源矩形上下偏移不够，会把内容倒置）。
                 _canvas.Flush();
-                int rowBytes = w * 4;
-                int rowStride = Width * 4;
-                IntPtr pixels = _bitmap.GetPixels();
-                var rows = new byte[rowBytes * h];
-                for (int y = 0; y < h; y++)
+                var fullInfo = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                using (var full = SKImage.FromPixels(fullInfo, _bitmap.GetPixels(), Width * 4))
+                using (var paint = new SKPaint { FilterQuality = downscale > 1 ? SKFilterQuality.Medium : SKFilterQuality.None })
                 {
-                    int vy = ly + y;
-                    int by = _flipY ? (Height - 1 - vy) : vy;
-                    Marshal.Copy(pixels + (by * rowStride + lx * 4), rows, y * rowBytes, rowBytes);
+                    float sy = _flipY ? Height - (ly + h) : ly;
+                    canvas.Save();
+                    if (_flipY)
+                    {
+                        canvas.Translate(0, oh);
+                        canvas.Scale(1, -1);
+                    }
+                    canvas.DrawImage(full, new SKRect(lx, sy, lx + w, sy + h), dst, paint);
+                    canvas.Restore();
                 }
-                using (var ui = SKImage.FromPixelCopy(info, rows, rowBytes))
-                    canvas.DrawImage(ui, 0, 0, new SKPaint());
             }
 
             var img = ps.Surface.Snapshot();
             ReleaseSurface(ps);
             return img;
+        }
+
+        /// <summary>
+        /// 只截取图层在 region 内的原始内容（**不**合成 backdrop）。
+        /// 供 SaveLayerAsTexture 使用：官方按 scissor 截取当前图层，纹理尺寸 = 区域尺寸。
+        /// </summary>
+        private SKImage GetRawRegionSnapshot(Layer layer, SKRect region)
+        {
+            int lx = (int)Math.Round(region.Left), ly = (int)Math.Round(region.Top);
+            int w = Math.Max(1, (int)Math.Round(region.Right - region.Left));
+            int h = Math.Max(1, (int)Math.Round(region.Bottom - region.Top));
+            var dst = new SKRect(0, 0, w, h);
+            var src = new SKRect(lx, ly, lx + w, ly + h);
+
+            if (layer.Surface != null)
+            {
+                var ps = AcquireSurface(w, h);
+                using (var full = layer.Surface.Snapshot())
+                using (var paint = new SKPaint())
+                    ps.Surface.Canvas.DrawImage(full, src, dst, paint);
+                var img = ps.Surface.Snapshot();
+                ReleaseSurface(ps);
+                return img;
+            }
+
+            // 基座：共享像素绘制到区域 surface（bottom-up 时在区域内部上下翻转）。
+            {
+                _canvas.Flush();
+                var ps = AcquireSurface(w, h);
+                var fullInfo = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                using (var full = SKImage.FromPixels(fullInfo, _bitmap.GetPixels(), Width * 4))
+                using (var paint = new SKPaint())
+                {
+                    float sy = _flipY ? Height - (ly + h) : ly;
+                    var canvas2 = ps.Surface.Canvas;
+                    canvas2.Save();
+                    if (_flipY)
+                    {
+                        canvas2.Translate(0, h);
+                        canvas2.Scale(1, -1);
+                    }
+                    canvas2.DrawImage(full, new SKRect(lx, sy, lx + w, sy + h), dst, paint);
+                    canvas2.Restore();
+                }
+                var img = ps.Surface.Snapshot();
+                ReleaseSurface(ps);
+                return img;
+            }
         }
 
         /// <summary>bottom-up 行序 → top-down（flipY 基座专用）。</summary>
@@ -725,12 +1324,22 @@ namespace CuRmlGUI.Render
             return SKImage.FromPixelCopy(info, flipped, rowBytes);
         }
 
-        /// <summary>按顺序应用滤镜（每次一个，经临时 surface）。返回结果图像（可能=source）。</summary>
+        /// <summary>
+        /// 按顺序应用滤镜（每次一个，经临时 surface）。返回结果图像（可能=source）。
+        /// 输入图像可能已经是半分辨率（由 GetSnapshotRegion 直接生成），
+        /// preScale 用于按同一比例重建模糊/阴影参数。
+        /// </summary>
         /// <param name="skipBlur">伪模糊模式：跳过高斯模糊（观感由低分辨率 backdrop 放大提供）。</param>
-        private SKImage ApplyFilters(SKImage source, IntPtr filters, int filterCount, bool skipBlur = false)
+        /// <param name="preScale">输入图像的预缩放比（1 或 0.5）。</param>
+        /// <param name="resultScale">返回图像的缩放比；调用方按目标区域拉伸绘制。</param>
+        private SKImage ApplyFilters(SKImage source, IntPtr filters, int filterCount, bool skipBlur,
+            float preScale, out float resultScale)
         {
+            resultScale = preScale <= 0f ? 1f : preScale;
             if (filterCount <= 0) return source;
+
             SKImage current = source;
+            bool owns = false;
 
             for (int i = 0; i < filterCount; i++)
             {
@@ -738,27 +1347,64 @@ namespace CuRmlGUI.Render
                 if (!_filters.TryGetValue(handle, out var entry)) continue;
                 if (skipBlur && entry.IsBlur) continue;
 
+                _statFilterArea += (long)current.Width * current.Height;
+                _cFilterPass++;
+                _lastFilterW = current.Width;
+                _lastFilterH = current.Height;
+
                 var temp = AcquireSurface(current.Width, current.Height);
-                using (var paint = new SKPaint())
+                if (entry.Kind == FilterKind.Image)
                 {
-                    if (entry.Kind == FilterKind.Image)
-                        paint.ImageFilter = entry.ImageFilter;
-                    temp.Surface.Canvas.DrawImage(current, 0, 0, paint);
+                    SKImageFilter f = BuildScaledFilter(entry, resultScale, out bool ownsFilter);
+                    using (var paint = new SKPaint { ImageFilter = f })
+                        temp.Surface.Canvas.DrawImage(current, 0, 0, paint);
+                    if (ownsFilter) f.Dispose();
+                }
+                else
+                {
+                    temp.Surface.Canvas.DrawImage(current, 0, 0, new SKPaint());
+                    if (entry.MaskImage != null)
+                    {
+                        // DstIn：结果 = temp * maskAlpha（保留 temp 内容，按 mask 透明度裁剪）。
+                        using (var mp = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                            temp.Surface.Canvas.DrawImage(entry.MaskImage,
+                                new SKRect(0, 0, entry.MaskImage.Width, entry.MaskImage.Height),
+                                new SKRect(0, 0, current.Width, current.Height), mp);
+                    }
                 }
 
-                if (entry.Kind == FilterKind.Mask)
-                {
-                    // DstIn：结果 = temp * maskAlpha（保留 temp 内容，按 mask 透明度裁剪）。
-                    using (var mp = new SKPaint { BlendMode = SKBlendMode.DstIn })
-                        temp.Surface.Canvas.DrawImage(entry.MaskImage, 0, 0, mp);
-                }
-
-                if (!ReferenceEquals(current, source)) current.Dispose();
+                if (owns) current.Dispose();
                 current = temp.Surface.Snapshot();
                 ReleaseSurface(temp);
+                owns = true;
             }
 
             return current;
+        }
+
+        /// <summary>按缩放比重建模糊/阴影滤镜（颜色矩阵与分辨率无关，直接复用）。</summary>
+        private static SKImageFilter BuildScaledFilter(FilterEntry e, float scale, out bool owns)
+        {
+            owns = false;
+            if (scale >= 0.999f || e.ImageFilter == null) return e.ImageFilter;
+
+            switch (e.SubKind)
+            {
+                case FilterSubKind.Blur:
+                    if (e.Sigma <= 0f) return e.ImageFilter;
+                    owns = true;
+                    return SKImageFilter.CreateBlur(e.Sigma * scale, e.Sigma * scale, null, null);
+
+                case FilterSubKind.DropShadow:
+                    owns = true;
+                    return SKImageFilter.CreateDropShadow(
+                        e.OffsetX * scale, e.OffsetY * scale, e.Sigma * scale, e.Sigma * scale,
+                        e.ShadowColor, SKDropShadowImageFilterShadowMode.DrawShadowAndForeground,
+                        null, null);
+
+                default:
+                    return e.ImageFilter;
+            }
         }
 
         private static int ReadFilterHandle(IntPtr filters, int index)
@@ -770,17 +1416,16 @@ namespace CuRmlGUI.Render
             }
         }
 
-        private PooledSurface AcquireSurface(int w, int h)
+        private static long SurfaceKey(int w, int h) => ((long)w << 32) ^ (uint)h;
+
+        private PooledSurface AcquireSurface(int w, int h, bool clear = true)
         {
-            while (_surfacePool.Count > 0)
+            long key = SurfaceKey(w, h);
+            if (_surfacePool.TryGetValue(key, out var stack) && stack.Count > 0)
             {
-                var ps = _surfacePool.Pop();
-                if (ps.Width == w && ps.Height == h)
-                {
-                    ps.Surface.Canvas.Clear(SKColors.Transparent);
-                    return ps;
-                }
-                ps.Surface.Dispose();   // 尺寸不符（Resize 后遗留），丢弃
+                var ps = stack.Pop();
+                if (clear) ps.Surface.Canvas.Clear(SKColors.Transparent);
+                return ps;
             }
             var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
             var surf = SKSurface.Create(info);
@@ -790,7 +1435,16 @@ namespace CuRmlGUI.Render
 
         private void ReleaseSurface(PooledSurface ps)
         {
-            if (ps != null) _surfacePool.Push(ps);
+            if (ps == null) return;
+            long key = SurfaceKey(ps.Width, ps.Height);
+            if (!_surfacePool.TryGetValue(key, out var stack))
+            {
+                stack = new Stack<PooledSurface>();
+                _surfacePool[key] = stack;
+            }
+            // 每个尺寸最多缓存 4 张，避免长期运行时无界增长。
+            if (stack.Count < 4) stack.Push(ps);
+            else ps.Surface.Dispose();
         }
 
         // ------------------------------------------------------------------ 颜色矩阵
@@ -927,7 +1581,9 @@ namespace CuRmlGUI.Render
         public void Dispose()
         {
             while (_layerStack.Count > 1) PopLayer();
-            while (_surfacePool.Count > 0) _surfacePool.Pop().Surface.Dispose();
+            foreach (var kv in _surfacePool)
+                while (kv.Value.Count > 0) kv.Value.Pop().Surface.Dispose();
+            _surfacePool.Clear();
 
             foreach (var kv in _filters)
             {
@@ -937,11 +1593,24 @@ namespace CuRmlGUI.Render
             }
             _filters.Clear();
 
+            foreach (var kv in _shaders) kv.Value?.Dispose();
+            _shaders.Clear();
+
+            foreach (var kv in _textureShaders) kv.Value?.Dispose();
+            _textureShaders.Clear();
+
             foreach (var kv in _textures) kv.Value.Dispose();
             _textures.Clear();
 
             _backdrop?.Dispose();
             _backdrop = null;
+
+            _clipMaskImage?.Dispose();
+            _clipMaskImage = null;
+            _clipMaskCanvas?.Dispose();
+            _clipMaskCanvas = null;
+            _clipMaskBitmap?.Dispose();
+            _clipMaskBitmap = null;
 
             _canvas?.Dispose();
             _bitmap?.Dispose();

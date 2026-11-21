@@ -10,15 +10,16 @@ using UnityEngine;
 namespace CuRmlGUI.Presentation
 {
     /// <summary>
-    /// 开发用 spike 覆盖层（默认关闭，仅用于联调渲染/呈现/输入链路）。
+    /// iOS 风格「液态玻璃」演示页（默认关闭）。
     ///
-    /// 它不是最终 API：仅验证
-    ///   1) 原生 RmlUi → Skia 合成 → Unity 纹理 全链路在游戏内可用；
-    ///   2) 鼠标/键盘/文本输入能否驱动 RmlUi（按钮点击、文本输入）。
+    /// 它同时是渲染管线的端到端验证：
+    ///   1) 原生 RmlUi → Skia 合成 → Unity 纹理（RGBA8888，bottom-up）；
+    ///   2) backdrop-filter 真毛玻璃（抓屏 → 模糊 → 按 border-radius 裁剪合成）；
+    ///   3) clip mask（圆角裁剪）、gradient shader（高光/渐变）、表单控件与输入。
     ///
-    /// 快捷键切换显隐；坐标以屏幕左上角为原点。
+    /// 快捷键切换显隐；坐标以屏幕左上角为原点。配置段沿用 "[Spike]" 以兼容旧配置。
     /// </summary>
-    internal sealed class WebGuiSpikeOverlay : MonoBehaviour
+    internal sealed class LiquidGlassDemo : MonoBehaviour
     {
         private KeyCode _toggleKey = KeyCode.F1;
         private float _dpiScale = 1f;
@@ -31,7 +32,8 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        private const float CaptureInterval = 1f / 15f;   // 15fps 节流
+        // 抓屏节流：玻璃背景 10fps 足够（每次抓屏是同步读回，成本远高于重绘）。
+        private const float CaptureInterval = 1f / 10f;
         private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
 
         // 模糊实现方式：Real=Skia 高斯；Fake=超低采样+双线性放大。
@@ -114,9 +116,9 @@ namespace CuRmlGUI.Presentation
                     {
                         _log?.LogInfo(string.Format(
                             "[CuRmlGUI] backdrop: capture avg {0:F1} ms/frame + render {1:F2} ms/frame " +
-                            "({2} frames, {3} actually re-rendered).",
+                            "({2} frames, {3} actually re-rendered) | {4}",
                             _costAccumMs / _costFrames, _renderAccumMs / _costFrames,
-                            _costFrames, _renderFrames));
+                            _costFrames, _renderFrames, _view.TakeRenderStats()));
                         _costAccumMs = 0;
                         _renderAccumMs = 0;
                         _costFrames = 0;
@@ -131,7 +133,7 @@ namespace CuRmlGUI.Presentation
             catch (Exception e)
             {
                 _failed = true;
-                _log?.LogError("[CuRmlGUI] Spike overlay update failed: " + e);
+                _log?.LogError("[CuRmlGUI] LiquidGlass demo update failed: " + e);
             }
         }
 
@@ -173,7 +175,7 @@ namespace CuRmlGUI.Presentation
                 if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
                 _grabRequested = false;
             }
-            _log?.LogInfo("[CuRmlGUI] Spike overlay " + (visible ? "shown" : "hidden"));
+            _log?.LogInfo("[CuRmlGUI] LiquidGlass demo " + (visible ? "shown" : "hidden"));
         }
 
         private void EnsureView()
@@ -191,14 +193,14 @@ namespace CuRmlGUI.Presentation
             LoadFonts();
             _view.ElementEvent += (type, id) => _log?.LogInfo($"[CuRmlGUI] event: {type} / {id}");
 
-            if (!_view.LoadDocument(SpikeRml, SpikeCss.Replace("__FAMILY__", _fontFamily)))
-                _log?.LogError("[CuRmlGUI] Spike document failed to load.");
+            if (!_view.LoadDocument(PageRml, PageCss.Replace("__FAMILY__", _fontFamily)))
+                _log?.LogError("[CuRmlGUI] LiquidGlass document failed to load.");
         }
 
         private void LoadFonts()
         {
             // 1) 优先使用随插件发行的子集字体：Latin 主字体 + CJK 回退字体。
-            string dir = Path.GetDirectoryName(typeof(WebGuiSpikeOverlay).Assembly.Location);
+            string dir = Path.GetDirectoryName(typeof(LiquidGlassDemo).Assembly.Location);
             string latin = Path.Combine(dir, "assets", "fonts", "curmlgui-latin.ttf");
             string cjk = Path.Combine(dir, "assets", "fonts", "curmlgui-cjk.otf");
 
@@ -318,6 +320,8 @@ namespace CuRmlGUI.Presentation
         //
         // 画面本身不含自己 UI → 无需「蒙版剔除 + 图像修补」，X 形变形从根上消失。
         private byte[] _backdropRgba;
+        private int[] _backdropXMap;
+        private int _backdropXMapSrcW = -1, _backdropXMapDstW = -1;
         private Texture2D _pendingShot;   // 已抓屏、待读回像素
         private bool _grabRequested;       // 已排队，等 OnGUI 抓
         private float _nextCapture;
@@ -372,18 +376,59 @@ namespace CuRmlGUI.Presentation
                 int bpp = raw.Length / (sw * sh);
                 if (bpp == 3 || bpp == 4)
                 {
-                    for (int y = 0; y < dh; y++)
+                    // 预计算目标 x → 源 x，避免每像素做整数除法（原来 54 万次除法 ≈ 数毫秒）。
+                    if (_backdropXMap == null || _backdropXMap.Length != dw || _backdropXMapSrcW != sw || _backdropXMapDstW != dw)
                     {
-                        int srcRow = (y * sh / dh) * sw;
-                        int dstRow = y * dw;
+                        _backdropXMap = new int[dw];
                         for (int x = 0; x < dw; x++)
+                            _backdropXMap[x] = x * sw / dw;
+                        _backdropXMapSrcW = sw;
+                        _backdropXMapDstW = dw;
+                    }
+                    var xmap = _backdropXMap;
+
+                    // 同时把 bottom-up 直接写成 top-down（省掉一次整图翻转）。
+                    // 用裸指针读 NativeArray，避免每像素的边界检查/托管索引开销。
+                    unsafe
+                    {
+                        byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
+                            .GetUnsafeReadOnlyPtr(raw);
+                        fixed (byte* dstBase = _backdropRgba)
                         {
-                            int si = (srcRow + x * sw / dw) * bpp;
-                            int o = (dstRow + x) * 4;
-                            _backdropRgba[o] = raw[si];
-                            _backdropRgba[o + 1] = raw[si + 1];
-                            _backdropRgba[o + 2] = raw[si + 2];
-                            _backdropRgba[o + 3] = bpp >= 4 ? raw[si + 3] : (byte)255;
+                            if (bpp == 4)
+                            {
+                                for (int y = 0; y < dh; y++)
+                                {
+                                    int srcRow = (y * sh / dh) * sw;
+                                    int dstRow = (dh - 1 - y) * dw;
+                                    for (int x = 0; x < dw; x++)
+                                    {
+                                        byte* s = src + (srcRow + xmap[x]) * 4;
+                                        byte* d = dstBase + (dstRow + x) * 4;
+                                        d[0] = s[0];
+                                        d[1] = s[1];
+                                        d[2] = s[2];
+                                        d[3] = s[3];
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                for (int y = 0; y < dh; y++)
+                                {
+                                    int srcRow = (y * sh / dh) * sw;
+                                    int dstRow = (dh - 1 - y) * dw;
+                                    for (int x = 0; x < dw; x++)
+                                    {
+                                        byte* s = src + (srcRow + xmap[x]) * 3;
+                                        byte* d = dstBase + (dstRow + x) * 4;
+                                        d[0] = s[0];
+                                        d[1] = s[1];
+                                        d[2] = s[2];
+                                        d[3] = 255;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -394,7 +439,7 @@ namespace CuRmlGUI.Presentation
                     for (int y = 0; y < dh; y++)
                     {
                         int srcRow = (y * sh / dh) * sw;
-                        int dstRow = y * dw;
+                        int dstRow = (dh - 1 - y) * dw;
                         for (int x = 0; x < dw; x++)
                         {
                             var c = px[srcRow + x * sw / dw];
@@ -406,9 +451,6 @@ namespace CuRmlGUI.Presentation
                         }
                     }
                 }
-
-                // bottom-up → top-down（SetBackdrop 契约）。
-                FlipRowsV(_backdropRgba, dw, dh);
 
                 // 目标区域铺满整个视口（源是降采样图，需拉伸）。
                 _view.SetBackdrop(_backdropRgba, dw, dh, 0, 0, Screen.width, Screen.height);
@@ -438,7 +480,6 @@ namespace CuRmlGUI.Presentation
                 Buffer.BlockCopy(row, 0, rgba, b, rowBytes);
             }
         }
-
         private static KeyCode[] BuildKeyList()
         {
             var list = new List<KeyCode>
@@ -466,341 +507,134 @@ namespace CuRmlGUI.Presentation
             _backdropRgba = null;
         }
 
-        // ------------------------------------------------------------------ spike 文档
+        // ------------------------------------------------------------------ 演示页文档
 
-        private const string SpikeRml = @"
+        private const string PageRml = @"
 <rml>
 <head>
 </head>
 <body>
-  <!-- 主面板：半透明暗色，承载所有演示卡片（不用 backdrop-filter，控制模糊成本） -->
-  <div id=""win"">
-    <div id=""titlebar"">
-      <span class=""ttl"">CuRmlGUI · 效果演示</span>
-      <span id=""hint"">F1 切换显隐 · 悬停 / 点击 / 输入可交互</span>
+  <div id=""page"">
+    <div id=""statusbar""><span class=""sb-left"">9:41</span><span class=""sb-right"">5G ▮▮▮</span></div>
+
+    <div id=""clock"">
+      <div class=""time"">9:41</div>
+      <div class=""date"">11月21日 星期五</div>
     </div>
 
-    <div class=""controls"">
-      <button id=""btn"">按钮 Button</button>
-      <button class=""ghost"">幽灵 Ghost</button>
-      <label class=""chk""><input type=""checkbox"" checked=""""/> 勾选</label>
-      <label class=""rad""><input type=""radio"" name=""grp"" checked=""""/> A</label>
-      <label class=""rad""><input type=""radio"" name=""grp""/> B</label>
-      <input type=""text"" id=""name"" placeholder=""文本输入...""/>
-      <select><option>选项 一</option><option>选项 二</option><option>选项 三</option></select>
-    </div>
-    <div class=""controls"">
-      <span class=""label"">滑块</span>
-      <input type=""range"" min=""0"" max=""100"" value=""60""/>
-      <span class=""label"">事件</span>
-      <span id=""clicks"">（交互打印到 BepInEx 日志）</span>
+    <div id=""widgets"">
+      <div class=""card weather"">
+        <div class=""w-head""><span class=""w-city"">未知星球</span><span class=""w-temp"">-4°</span></div>
+        <div class=""w-desc"">多云 · 最高 -1°</div>
+        <div class=""w-hours""><span>10时 -3°</span><span>11时 -2°</span><span>12时 0°</span><span>13时 1°</span></div>
+      </div>
+
+      <div class=""card music"">
+        <div class=""album""></div>
+        <div class=""m-meta""><span class=""m-title"">Liquid Dreams</span><span class=""m-sub"">CuRmlGUI Radio</span></div>
+        <div class=""m-play"">PLAY</div>
+      </div>
+
+      <div class=""card cal"">
+        <div class=""cal-day"">21</div>
+        <div class=""cal-meta""><span class=""cal-title"">今天</span><span class=""cal-sub"">3 个日程</span></div>
+      </div>
+
+      <div class=""card battery"">
+        <div class=""bat-num"">87%</div>
+        <div class=""bat-bar""><div class=""bat-fill""></div></div>
+        <div class=""bat-sub"">电量 · 预计 6 小时</div>
+      </div>
     </div>
 
-    <div class=""grid"">
-      <div class=""card""><div class=""ct"">旋转 Spinner</div><div class=""spin""></div></div>
-      <div class=""card""><div class=""ct"">脉冲 Pulse</div><div class=""pulse""></div></div>
-      <div class=""card""><div class=""ct"">弹跳 Bounce</div><div class=""ball""></div></div>
-      <div class=""card""><div class=""ct"">均衡器 Wave</div><div class=""eq""><i></i><i></i><i></i><i></i><i></i></div></div>
-      <div class=""card""><div class=""ct"">进度 Progress</div><div class=""bar""><div class=""fill""></div></div></div>
-      <div class=""card""><div class=""ct"">色轮 ColorCycle</div><div class=""colorbox""></div></div>
-      <div class=""card""><div class=""ct"">打字 Typing</div><div class=""typing""><i></i><i></i><i></i></div></div>
-      <div class=""card""><div class=""ct"">滑入 SlideIn</div><div class=""slidebox"">Hi</div></div>
-      <div class=""card""><div class=""ct"">悬停倾角 Tilt</div><div class=""tiltbox"">Hover</div></div>
-      <div class=""card""><div class=""ct"">辉光 Glow</div><button class=""glowbtn"">GLOW</button></div>
-      <div class=""card""><div class=""ct"">霓虹 Neon</div><div class=""neon"">NEON</div></div>
-      <div class=""card""><div class=""ct"">阴影 Shadow</div><div class=""shadowbox""></div></div>
+    <div class=""card cc"">
+      <div class=""cc-grid"">
+        <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">Wi-Fi</span></label>
+        <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">蓝牙</span></label>
+        <label class=""tile""><input type=""checkbox""/><span class=""t-label"">飞行</span></label>
+        <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">蜂窝</span></label>
+      </div>
+      <div class=""cc-slider""><span class=""s-label"">亮度</span><input type=""range"" min=""0"" max=""100"" value=""78""/></div>
+      <div class=""cc-slider""><span class=""s-label"">音量</span><input type=""range"" min=""0"" max=""100"" value=""52""/></div>
     </div>
-  </div>
-
-  <!-- 独立毛玻璃展示：背后是实时游戏画面 -->
-  <div id=""glass"">
-    <span class=""gtitle"">毛玻璃 Frosted</span>
-    <span class=""gbody"">backdrop-filter: blur(7px) · 1/2 降采样</span>
-    <span class=""gbody2"">背后为实时游戏画面（自身 UI 已由 alpha 蒙版剔除，不闪烁）</span>
   </div>
 </body>
-</rml>";
+</rml>
+";
 
-        private const string SpikeCss = @"
-body {
+        private const string PageCss = @"
+body { width: 100%; height: 100%; font-family: __FAMILY__; }
+#page {
   width: 100%; height: 100%;
-  background: transparent;
-  font-family: __FAMILY__;
-  font-size: 14px;
-  color: #e8e8f0;
-}
-
-/* ============ 主面板 ============ */
-#win {
-  position: absolute;
-  left: 60px; top: 60px;
-  width: 1160px;
-  background: #1d2135;
-  border-width: 1px;
-  border-color: #3a4166;
-  border-radius: 16px;
-  overflow: hidden;
-  padding-bottom: 6px;
-}
-
-#titlebar {
-  height: 40px;
-  padding-left: 16px;
-  line-height: 40px;
-  font-size: 16px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
   color: #ffffff;
-  background: #2a3050;
-  border-bottom-width: 1px;
-  border-bottom-color: #3a4166;
-}
-.ttl { font-weight: bold; letter-spacing: 1px; color: #cfe0ff; }
-#hint { float: right; margin-right: 16px; font-size: 12px; color: rgba(255, 255, 255, 0.55); }
-
-/* ============ 控件行 ============ */
-.controls { padding: 12px 16px 0 16px; }
-.label { color: #b8c2e0; margin-right: 8px; }
-
-button {
-  height: 28px;
-  padding-left: 14px; padding-right: 14px;
-  background: #3a5bd0;
-  color: #ffffff;
-  border-width: 0px;
-  border-radius: 6px;
-  transition: 0.16s transform, 0.16s background-color;
-}
-button:hover { background: #4a6be0; transform: translateY(-1px); }
-button:active { background: #2a4bb0; transform: scale(0.95); }
-button.ghost { background: transparent; border-width: 1px; border-color: rgba(255, 255, 255, 0.4); }
-button.ghost:hover { border-color: #ffffff; background: rgba(255, 255, 255, 0.08); }
-
-.chk, .rad { margin-left: 10px; color: #cdd6f0; }
-input[type=checkbox], input[type=radio] { width: 15px; height: 15px; margin-right: 3px; }
-
-input[type=text] {
-  height: 26px;
-  padding-left: 8px;
-  background: #10142a;
-  color: #ffffff;
-  border-width: 1px;
-  border-color: #3a4166;
-  border-radius: 5px;
-  transition: 0.16s border-color;
-}
-input[type=text]:focus { border-color: #7aa2ff; box-shadow: 0 0 8px rgba(122, 162, 255, 0.6); }
-
-select {
-  height: 26px;
-  background: #10142a;
-  color: #ffffff;
-  border-width: 1px;
-  border-color: #3a4166;
-  border-radius: 5px;
 }
 
-input[type=range] { width: 160px; }
-#clicks { margin-left: 4px; color: #9ad0ff; }
+#statusbar { position: absolute; left: 56px; right: 56px; top: 22px; height: 20px; }
+.sb-left { font-size: 15px; font-weight: bold; }
+.sb-right { position: absolute; right: 0; top: 0; font-size: 12px; color: rgba(255,255,255,0.85); }
 
-/* ============ 卡片网格 ============ */
-.grid {
-  padding: 14px 16px 0 16px;
-}
+#clock { text-align: center; margin-bottom: 20px; }
+#clock .time { font-size: 80px; font-weight: bold; letter-spacing: -2px; line-height: 84px; }
+#clock .date { font-size: 15px; color: rgba(255,255,255,0.72); }
+
+#widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; }
+
+/* 液态玻璃：半透明底 + 渐变高光（decorator）+ 背景模糊 + 圆角裁剪 */
 .card {
-  display: inline-block;
-  vertical-align: top;
-  width: 172px;
-  height: 118px;
-  margin-right: 12px;
-  margin-bottom: 12px;
-  padding: 8px;
-  background: #272d4c;
+  background-color: rgba(255,255,255,0.14);
+  decorator: linear-gradient(155deg, rgba(255,255,255,0.34), rgba(255,255,255,0.06) 38%, rgba(255,255,255,0.02) 62%, rgba(255,255,255,0.20));
   border-width: 1px;
-  border-color: #3d4470;
-  border-radius: 10px;
-  text-align: center;
-  overflow: hidden;
-}
-.ct { display: block; font-size: 12px; color: rgba(255, 255, 255, 0.65); margin-bottom: 10px; }
-
-/* --- 旋转 Spinner --- */
-@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.spin {
-  width: 32px; height: 32px;
-  margin: 14px auto;
-  border-width: 4px;
-  border-color: rgba(255, 255, 255, 0.14);
-  border-top-color: #6ea8ff;
-  border-radius: 50%;
-  animation: spin 0.9s linear infinite;
+  border-color: rgba(255,255,255,0.34);
+  border-radius: 26px;
+  backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.38);
 }
 
-/* --- 脉冲 Pulse --- */
-@keyframes pulse {
-  0% { transform: scale(0.6); opacity: 1; }
-  70% { transform: scale(1.5); opacity: 0.3; }
-  100% { transform: scale(1.5); opacity: 0; }
+.weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }
+
+.w-head { display: flex; }
+.w-city { flex: 1; font-size: 15px; }
+.w-temp { font-size: 34px; font-weight: bold; }
+.w-desc { margin-top: -2px; font-size: 12px; color: rgba(255,255,255,0.72); }
+.w-hours { display: flex; margin-top: 18px; }
+.w-hours span { flex: 1; text-align: center; font-size: 11px; color: rgba(255,255,255,0.78); }
+
+.music { display: flex; }
+.album {
+  width: 60px; height: 60px; border-radius: 14px;
+  background-color: #5b6cff;
+  decorator: linear-gradient(130deg, #4facfe, #7b61ff 55%, #f857a6);
 }
-.pulse {
-  width: 24px; height: 24px;
-  margin: 18px auto;
-  background: #ff6b6b;
-  border-radius: 50%;
-  animation: pulse 1.1s ease-out infinite;
+.m-meta { flex: 1; padding-left: 12px; }
+.m-title { font-size: 15px; font-weight: bold; }
+.m-sub { font-size: 12px; color: rgba(255,255,255,0.70); }
+.m-play {
+  width: 40px; height: 26px; border-radius: 13px;
+  background-color: rgba(255,255,255,0.92); color: #0A84FF;
+  text-align: center; line-height: 26px; font-size: 10px; font-weight: bold;
 }
 
-/* --- 弹跳 Bounce --- */
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-28px); }
-}
-.ball {
-  width: 22px; height: 22px;
-  margin: 30px auto 8px;
-  background: #ffd93d;
-  border-radius: 50%;
-  animation: bounce 0.55s infinite;
-}
+.cal { display: flex; }
+.cal-day { width: 84px; font-size: 56px; font-weight: bold; line-height: 70px; }
+.cal-meta { flex: 1; padding-top: 14px; }
+.cal-title { font-size: 15px; font-weight: bold; }
+.cal-sub { font-size: 12px; color: rgba(255,255,255,0.70); }
 
-/* --- 均衡器 Wave --- */
-@keyframes wave { 0%, 100% { transform: scaleY(0.24); } 50% { transform: scaleY(1); } }
-.eq { height: 46px; display: flex; justify-content: center; align-items: flex-end; }
-.eq i {
-  width: 6px; height: 34px;
-  margin-right: 5px;
-  background: #4ecdc4;
-  border-radius: 3px;
-  transform-origin: 50% 100%;
-  animation: wave 0.9s infinite;
-}
-.eq i:nth-child(2) { animation: wave 0.9s 0.12s infinite; }
-.eq i:nth-child(3) { animation: wave 0.9s 0.24s infinite; }
-.eq i:nth-child(4) { animation: wave 0.9s 0.36s infinite; }
-.eq i:nth-child(5) { animation: wave 0.9s 0.48s infinite; }
+.battery { display: flex; flex-direction: column; }
+.bat-num { font-size: 34px; font-weight: bold; }
+.bat-bar { width: 100%; height: 8px; margin-top: 16px; border-radius: 4px; background-color: rgba(255,255,255,0.18); }
+.bat-fill { width: 87%; height: 8px; border-radius: 4px; decorator: linear-gradient(to right, #34C759, #7dffb2); }
+.bat-sub { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.70); }
 
-/* --- 进度 Progress --- */
-@keyframes fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-.bar {
-  width: 140px; height: 10px;
-  margin: 24px auto;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
-  overflow: hidden;
-}
-.fill {
-  width: 100%; height: 100%;
-  background: #4ecdc4;
-  border-radius: 5px;
-  transform-origin: 0% 50%;
-  animation: fill 2.4s ease-in-out infinite;
-}
-
-/* --- 色轮 ColorCycle --- */
-@keyframes cycle {
-  0% { background-color: #ff6b6b; }
-  25% { background-color: #ffd93d; }
-  50% { background-color: #4ecdc4; }
-  75% { background-color: #6ea8ff; }
-  100% { background-color: #ff6b6b; }
-}
-.colorbox {
-  width: 46px; height: 46px;
-  margin: 16px auto;
-  border-radius: 10px;
-  animation: cycle 6s linear infinite;
-}
-
-/* --- 打字 Typing --- */
-@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-.typing { display: flex; justify-content: center; align-items: center; margin-top: 24px; }
-.typing i {
-  width: 8px; height: 8px;
-  margin-right: 6px;
-  background: #ffffff;
-  border-radius: 50%;
-  animation: blink 1.2s infinite;
-}
-.typing i:nth-child(2) { animation: blink 1.2s 0.2s infinite; }
-.typing i:nth-child(3) { animation: blink 1.2s 0.4s infinite; }
-
-/* --- 滑入 SlideIn --- */
-@keyframes slidein { from { transform: translateX(-44px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-.slidebox {
-  width: 84px; height: 46px;
-  margin: 16px auto;
-  line-height: 46px;
-  background: #6ea8ff;
-  color: #ffffff;
-  border-radius: 8px;
-  animation: slidein 1.1s ease-out;
-}
-
-/* --- 悬停倾角 Tilt --- */
-.tiltbox {
-  width: 84px; height: 46px;
-  margin: 16px auto;
-  line-height: 46px;
-  background: #4a5480;
-  color: #ffffff;
-  border-radius: 8px;
-  transition: 0.2s transform;
-}
-.tiltbox:hover { transform: rotate(-4deg) scale(1.1); }
-
-/* --- 辉光 Glow --- */
-.glowbtn {
-  margin-top: 22px;
-  height: 30px;
-  padding-left: 16px; padding-right: 16px;
-  background: #7c4dff;
-  color: #ffffff;
-  border-width: 0px;
-  border-radius: 6px;
-}
-.glowbtn:hover { box-shadow: 0 0 18px rgba(124, 77, 255, 0.95); }
-
-/* --- 霓虹 Neon --- */
-@keyframes neonflicker {
-  0%, 100% { opacity: 1; }
-  92% { opacity: 1; }
-  93% { opacity: 0.45; }
-  94% { opacity: 1; }
-  96% { opacity: 0.6; }
-  97% { opacity: 1; }
-}
-.neon {
-  margin-top: 16px;
-  font-size: 20px;
-  font-weight: bold;
-  color: #ffffff;
-  text-shadow: 0 0 6px #ff4dd8, 0 0 16px #ff4dd8;
-  animation: neonflicker 2.6s infinite;
-}
-
-/* --- 阴影 Shadow --- */
-.shadowbox {
-  width: 54px; height: 54px;
-  margin: 16px auto;
-  background: #ff9f43;
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(255, 159, 67, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
-/* ============ 毛玻璃展示 ============ */
-#glass {
-  position: absolute;
-  left: 1290px; top: 300px;
-  width: 360px; height: 300px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.10);
-  border-width: 1px;
-  border-color: rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
-  backdrop-filter: blur(7px);
-  color: #ffffff;
-}
-.gtitle { display: block; font-size: 18px; font-weight: bold; margin-bottom: 8px; }
-.gbody { display: block; font-size: 13px; color: #e8e8f5; margin-bottom: 4px; }
-.gbody2 { display: block; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.cc { width: 620px; height: 176px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
+.cc-grid { display: flex; }
+.tile { flex: 1; text-align: center; }
+.tile .t-label { margin-left: 6px; font-size: 13px; }
+.cc-slider { display: flex; margin-top: 14px; }
+.s-label { width: 44px; font-size: 13px; color: rgba(255,255,255,0.72); }
+.cc-slider input { flex: 1; }
 ";
     }
 }

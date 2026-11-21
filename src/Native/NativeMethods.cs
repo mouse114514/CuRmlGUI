@@ -15,6 +15,14 @@ namespace CuRmlGUI.Native
         public uint Color;
     }
 
+    /// <summary>与 <c>WG_ColorStop</c>（native/shim/webgui_shim.h）二进制兼容。颜色为预乘 RGBA（0..1）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WgColorStop
+    {
+        public float Position;
+        public float R, G, B, A;
+    }
+
     /// <summary>
     /// 与 <c>WG_FilterParams</c>（native/shim/webgui_shim.h）二进制兼容。
     /// sigma/value 为 float；color 为 RGBA（0-255）；offset 为 float。
@@ -71,6 +79,30 @@ namespace CuRmlGUI.Native
             IntPtr user, int x, int y, int width, int height, int enable);
 
         [UnmanagedFunctionPointer(Cc)]
+        public delegate void SetTransformFn(IntPtr user, IntPtr matrix, int isIdentity);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr LoadTextureFn(
+            IntPtr user, IntPtr source, out int width, out int height);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate UIntPtr CompileShaderFn(
+            IntPtr user, IntPtr name, int functionType,
+            float pX, float pY, float vX, float vY,
+            IntPtr stops, int stopCount);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void RenderShaderFn(
+            IntPtr user, UIntPtr shader,
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            UIntPtr texture,
+            float translateX, float translateY);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void ReleaseShaderFn(IntPtr user, UIntPtr shader);
+
+        [UnmanagedFunctionPointer(Cc)]
         public delegate UIntPtr CompileFilterFn(
             IntPtr user, IntPtr name, IntPtr filterParams);
 
@@ -95,6 +127,16 @@ namespace CuRmlGUI.Native
 
         [UnmanagedFunctionPointer(Cc)]
         public delegate UIntPtr SaveLayerAsTextureFn(IntPtr user);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void EnableClipMaskFn(IntPtr user, int enable);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void RenderToClipMaskFn(
+            IntPtr user, int op,
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            float translateX, float translateY);
 
         [UnmanagedFunctionPointer(Cc)]
         public delegate void EventFn(IntPtr user, IntPtr eventType, IntPtr elementId);
@@ -133,6 +175,27 @@ namespace CuRmlGUI.Native
             CompositeLayersFn compositeLayers,
             SaveLayerAsMaskImageFn saveLayerAsMaskImage,
             SaveLayerAsTextureFn saveLayerAsTexture);
+
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_clip_mask_callbacks(
+            IntPtr ctx, IntPtr user,
+            EnableClipMaskFn enableClipMask,
+            RenderToClipMaskFn renderToClipMask);
+
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_transform_callback(
+            IntPtr ctx, IntPtr user, SetTransformFn setTransform);
+
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_load_texture_callback(
+            IntPtr ctx, IntPtr user, LoadTextureFn loadTexture);
+
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_shader_callbacks(
+            IntPtr ctx, IntPtr user,
+            CompileShaderFn compileShader,
+            RenderShaderFn renderShader,
+            ReleaseShaderFn releaseShader);
 
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_set_event_callback(IntPtr ctx, IntPtr user, EventFn onEvent);

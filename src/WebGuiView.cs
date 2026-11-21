@@ -63,6 +63,13 @@ namespace CuRmlGUI
         private readonly NativeMethods.CompositeLayersFn _compositeLayersFn;
         private readonly NativeMethods.SaveLayerAsMaskImageFn _saveMaskFn;
         private readonly NativeMethods.SaveLayerAsTextureFn _saveTextureFn;
+        private readonly NativeMethods.EnableClipMaskFn _enableClipMaskFn;
+        private readonly NativeMethods.RenderToClipMaskFn _renderToClipMaskFn;
+        private readonly NativeMethods.SetTransformFn _setTransformFn;
+        private readonly NativeMethods.LoadTextureFn _loadTextureFn;
+        private readonly NativeMethods.CompileShaderFn _compileShaderFn;
+        private readonly NativeMethods.RenderShaderFn _renderShaderFn;
+        private readonly NativeMethods.ReleaseShaderFn _releaseShaderFn;
 
         /// <summary>元素事件（点击/悬停/焦点/change 等）。参数：(eventType, elementId)。</summary>
         public event Action<string, string> ElementEvent;
@@ -81,6 +88,9 @@ namespace CuRmlGUI
 
         /// <summary>像素缓冲字节数（<c>Width * Height * 4</c>）。</summary>
         public int ByteSize => _compositor.ByteSize;
+
+        /// <summary>取一份渲染分项耗时统计（诊断用），读取后清零。</summary>
+        public string TakeRenderStats() => _compositor.TakeStats();
 
         public bool IsValid => !_disposed && _ctx != IntPtr.Zero;
 
@@ -110,6 +120,13 @@ namespace CuRmlGUI
             _compositeLayersFn = OnCompositeLayers;
             _saveMaskFn = OnSaveLayerAsMaskImage;
             _saveTextureFn = OnSaveLayerAsTexture;
+            _enableClipMaskFn = OnEnableClipMask;
+            _renderToClipMaskFn = OnRenderToClipMask;
+            _setTransformFn = OnSetTransform;
+            _loadTextureFn = OnLoadTexture;
+            _compileShaderFn = OnCompileShader;
+            _renderShaderFn = OnRenderShader;
+            _releaseShaderFn = OnReleaseShader;
 
             _ctx = NativeMethods.wg_context_create(width, height, dpiScale <= 0f ? 1f : dpiScale);
             if (_ctx == IntPtr.Zero)
@@ -125,6 +142,13 @@ namespace CuRmlGUI
                 _compositeLayersFn, _saveMaskFn, _saveTextureFn);
 
             NativeMethods.wg_set_event_callback(_ctx, IntPtr.Zero, _eventFn);
+
+            NativeMethods.wg_set_clip_mask_callbacks(
+                _ctx, IntPtr.Zero, _enableClipMaskFn, _renderToClipMaskFn);
+            NativeMethods.wg_set_transform_callback(_ctx, IntPtr.Zero, _setTransformFn);
+            NativeMethods.wg_set_load_texture_callback(_ctx, IntPtr.Zero, _loadTextureFn);
+            NativeMethods.wg_set_shader_callbacks(
+                _ctx, IntPtr.Zero, _compileShaderFn, _renderShaderFn, _releaseShaderFn);
         }
 
         // ------------------------------------------------------------------ 文档 / 字体
@@ -345,7 +369,7 @@ select selectbox option:hover {
             // 每帧调用 Update：RmlUi 内部仅在脏时做布局，开销很小。
             NativeMethods.wg_update(_ctx);
 
-            if (_compositor.ConsumeBackdropDirty()) RequestRender();
+            if (_compositor.ConsumeBackdropDirty()) RequestRender(1);   // backdrop 只影响玻璃，1 帧足够
 
             // 渲染判定：
             //  - 输入/文档/backdrop 变更 → linger（立即渲染 + 传播 2 帧）；
@@ -371,12 +395,16 @@ select selectbox option:hover {
         }
 
         /// <summary>
-        /// 请求重绘。linger 留 2 帧，覆盖布局/事件在后续帧的传播
+        /// 请求重绘。默认 linger 留 2 帧，覆盖布局/事件在后续帧的传播
         /// （例如事件处理器里 <see cref="SetElementText"/> 触发的重新排版）。
         /// </summary>
-        private void RequestRender()
+        private void RequestRender() => RequestRender(2);
+
+        /// <summary>请求重绘，并指定需要连续重绘的帧数。</summary>
+        private void RequestRender(int linger)
         {
-            if (_renderLinger < 2) _renderLinger = 2;
+            if (linger < 1) linger = 1;
+            if (_renderLinger < linger) _renderLinger = linger;
         }
 
         private void UploadTexture()
@@ -577,6 +605,116 @@ select selectbox option:hover {
                 Debug.LogError("[CuRmlGUI] SaveLayerAsTexture failed: " + e);
                 return UIntPtr.Zero;
             }
+        }
+
+        // ------------------------------------------------------------------ 裁剪遮罩 / 变换 / 纹理加载
+
+        private void OnEnableClipMask(IntPtr user, int enable)
+        {
+            try { _compositor.EnableClipMask(enable != 0); }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] EnableClipMask failed: " + e); }
+        }
+
+        private void OnRenderToClipMask(
+            IntPtr user, int op,
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            float translateX, float translateY)
+        {
+            try
+            {
+                _compositor.RenderToClipMask(
+                    op, vertices, vertexCount, indices, indexCount, translateX, translateY);
+            }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] RenderToClipMask failed: " + e); }
+        }
+
+        private void OnSetTransform(IntPtr user, IntPtr matrix, int isIdentity)
+        {
+            try
+            {
+                if (isIdentity != 0 || matrix == IntPtr.Zero)
+                {
+                    _compositor.SetTransform(null);
+                    return;
+                }
+
+                // RmlUi Matrix4f 为 column-major，共 16 个 float。
+                var m = new float[16];
+                Marshal.Copy(matrix, m, 0, 16);
+                _compositor.SetTransform(m);
+            }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] SetTransform failed: " + e); }
+        }
+
+        private UIntPtr OnLoadTexture(IntPtr user, IntPtr source, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            try
+            {
+                string path = Utf8.FromPtr(source);
+                ulong handle = _compositor.LoadTextureFromFile(path, out int w, out int h);
+                if (handle == 0) return UIntPtr.Zero;
+                width = w;
+                height = h;
+                return (UIntPtr)handle;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] LoadTexture failed: " + e);
+                return UIntPtr.Zero;
+            }
+        }
+
+        // ------------------------------------------------------------------ Shader（gradient）
+
+        private UIntPtr OnCompileShader(
+            IntPtr user, IntPtr name, int functionType,
+            float pX, float pY, float vX, float vY,
+            IntPtr stops, int stopCount)
+        {
+            try
+            {
+                var arr = new WgColorStop[Math.Max(0, stopCount)];
+                if (stopCount > 0)
+                {
+                    int size = Marshal.SizeOf(typeof(WgColorStop));
+                    for (int i = 0; i < stopCount; i++)
+                        arr[i] = Marshal.PtrToStructure<WgColorStop>(stops + i * size);
+                }
+
+                int handle = _compositor.CompileShader(functionType, pX, pY, vX, vY, arr);
+                return (UIntPtr)(ulong)handle;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] CompileShader failed: " + e);
+                return UIntPtr.Zero;
+            }
+        }
+
+        private void OnRenderShader(
+            IntPtr user, UIntPtr shader,
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            UIntPtr texture,
+            float translateX, float translateY)
+        {
+            try
+            {
+                _compositor.RenderShader(
+                    (int)shader,
+                    vertices, vertexCount, indices, indexCount,
+                    (ulong)texture, translateX, translateY);
+            }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] RenderShader failed: " + e); }
+        }
+
+        private void OnReleaseShader(IntPtr user, UIntPtr shader)
+        {
+            try { _compositor.ReleaseShader((int)shader); }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] ReleaseShader failed: " + e); }
         }
 
         private void OnElementEvent(IntPtr user, IntPtr eventType, IntPtr elementId)

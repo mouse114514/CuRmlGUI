@@ -53,7 +53,7 @@ namespace CuRmlGUI
             }
 
             BindConfig();
-            if (_spikeEnabled.Value) CreateSpikeOverlay();
+            if (_spikeEnabled.Value) CreateDemo();
         }
 
         private void BindConfig()
@@ -89,16 +89,16 @@ namespace CuRmlGUI
                 "Real 模式不使用此项（固定为 4）。");
         }
 
-        private void CreateSpikeOverlay()
+        private void CreateDemo()
         {
             // 注意：不要 new GameObject + DontDestroyOnLoad —— 在 BepInEx 的 Awake 阶段
             // 创建的新对象会被游戏的首个场景加载销毁（实测日志里紧跟一条 OnDestroy）。
             // 直接挂在插件自己的 GameObject 上，生命周期由 BepInEx 保证。
-            var overlay = gameObject.AddComponent<WebGuiSpikeOverlay>();
+            var overlay = gameObject.AddComponent<LiquidGlassDemo>();
             overlay.Init(_spikeToggleKey.Value,
                 _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value,
                 _spikeBackdropBlur.Value, _spikeFakeBlurScale.Value);
-            Logger.LogInfo("Spike overlay created (press " + _spikeToggleKey.Value +
+            Logger.LogInfo("LiquidGlass demo created (press " + _spikeToggleKey.Value +
                 " to toggle, autoShow=" + _spikeAutoShow.Value + ", backdrop=" + _spikeBackdrop.Value +
                 ", blur=" + _spikeBackdropBlur.Value + ").");
         }

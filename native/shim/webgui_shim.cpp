@@ -84,18 +84,25 @@ static std::map<std::string, std::unique_ptr<GenericFilterInstancer>> g_custom_f
 
 
 // ------------------------------------------------------------------ 回调集合
+//
+// 与官方 RenderInterface_GL3 的成员一一对应（见 RmlUi_Renderer_GL3.h/.cpp）。
+// shim 只做「指令翻译」：RmlUi 的抽象绘制语义 → 托管侧 Skia 的等价操作。
 struct Callbacks
 {
     void* user = nullptr;
-    WG_DrawGeometryFn   draw = nullptr;
-    WG_CreateTextureFn  create_tex = nullptr;
-    WG_DestroyTextureFn destroy_tex = nullptr;
-    WG_GenerateTextureFn gen_tex = nullptr;
-    WG_SetScissorFn     set_scissor = nullptr;
-    WG_EventFn          on_event = nullptr;
-    void*               event_user = nullptr;
 
-    // 图层 / 滤镜
+    // ---- 基础渲染 ----
+    WG_DrawGeometryFn   draw = nullptr;         // RenderGeometry
+    WG_CreateTextureFn  create_tex = nullptr;   // GenerateTexture 的像素上传
+    WG_DestroyTextureFn destroy_tex = nullptr;  // ReleaseTexture
+    WG_GenerateTextureFn gen_tex = nullptr;     // GenerateTexture 的预分配
+    WG_LoadTextureFn    load_tex = nullptr;     // LoadTexture（文件 → 纹理）
+    WG_SetScissorFn     set_scissor = nullptr;  // EnableScissorRegion / SetScissorRegion
+
+    // ---- 变换 ----
+    WG_SetTransformFn   set_transform = nullptr; // SetTransform
+
+    // ---- 图层 / 滤镜 ----
     WG_CompileFilterFn          compile_filter = nullptr;
     WG_ReleaseFilterFn          release_filter = nullptr;
     WG_PushLayerFn              push_layer = nullptr;
@@ -103,9 +110,24 @@ struct Callbacks
     WG_CompositeLayersFn        composite_layers = nullptr;
     WG_SaveLayerAsMaskImageFn   save_mask = nullptr;
     WG_SaveLayerAsTextureFn     save_texture = nullptr;
+
+    // ---- 裁剪遮罩 ----
+    WG_EnableClipMaskFn         enable_clip_mask = nullptr;
+    WG_RenderToClipMaskFn       render_to_clip_mask = nullptr;
+
+    // ---- Shader（gradient）----
+    WG_CompileShaderFn          compile_shader = nullptr;
+    WG_RenderShaderFn           render_shader = nullptr;
+    WG_ReleaseShaderFn          release_shader = nullptr;
+
+    // ---- 事件 ----
+    WG_EventFn          on_event = nullptr;
+    void*               event_user = nullptr;
 };
 
-// 已编译几何（含顶点/索引），句柄即其指针
+// 已编译几何（含顶点/索引），句柄即其指针。
+// 与 GL3 的 CompiledGeometryData（vao/vbo/ibo + draw_count）等价：
+// 顶点/索引在 ReleaseGeometry 前保持不变。
 struct GeometryData
 {
     std::vector<WG_Vertex> verts;
@@ -113,11 +135,20 @@ struct GeometryData
 };
 
 // ------------------------------------------------------------------ 渲染接口
+//
+// 逐函数对照官方 RmlUi_Renderer_GL3.cpp 实现。GL3 用 GPU 状态机完成的语义，
+// 这里通过 C ABI 转交给托管侧 Skia 合成器，由它维护等价的软件状态
+// （scissor / 变换矩阵 / 图层栈 / stencil 遮罩）。
 class RenderInterfaceImpl : public RenderInterface
 {
 public:
     Callbacks* cb = nullptr;
 
+    // ================================================================
+    // 基础渲染（RenderInterface.h 第 40-70 行）
+    // ================================================================
+
+    // 对照 GL3::CompileGeometry：上传顶点/索引并返回句柄。
     CompiledGeometryHandle CompileGeometry(Span<const Vertex> vertices, Span<const int> indices) override
     {
         auto* g = new GeometryData();
@@ -137,6 +168,7 @@ public:
         return reinterpret_cast<CompiledGeometryHandle>(g);
     }
 
+    // 对照 GL3::RenderGeometry：按 translation 平移后绘制（变换由 SetTransform 另行提交）。
     void RenderGeometry(CompiledGeometryHandle geometry, Vector2f translation, TextureHandle texture) override
     {
         auto* g = reinterpret_cast<GeometryData*>(geometry);
@@ -153,13 +185,22 @@ public:
         delete reinterpret_cast<GeometryData*>(geometry);
     }
 
-    TextureHandle LoadTexture(Vector2i& texture_dimensions, const String& /*source*/) override
+    // 对照 GL3::LoadTexture：读取文件并交给后端建立纹理。
+    // 官方只解析 TGA；这里把「解码」交给托管侧（Skia 支持 PNG/JPG/TGA/WebP）。
+    TextureHandle LoadTexture(Vector2i& texture_dimensions, const String& source) override
     {
-        // <img> 图片加载 v1 暂不支持
         texture_dimensions = Vector2i(0, 0);
-        return 0;
+        if (!cb || !cb->load_tex) return 0;
+
+        int w = 0, h = 0;
+        const uintptr_t handle = cb->load_tex(cb->user, source.c_str(), &w, &h);
+        if (handle == 0 || w <= 0 || h <= 0) return 0;
+
+        texture_dimensions = Vector2i(w, h);
+        return (TextureHandle)handle;
     }
 
+    // 对照 GL3::GenerateTexture：source 为 RGBA（预乘）像素。
     TextureHandle GenerateTexture(Span<const byte> source, Vector2i source_dimensions) override
     {
         static uintptr_t counter = 1;
@@ -178,38 +219,66 @@ public:
         if (cb && cb->destroy_tex) cb->destroy_tex(cb->user, (uintptr_t)texture);
     }
 
+    // 对照 GL3::EnableScissorRegion：官方约定 enable==true 时紧接着一定会有
+    // SetScissorRegion()，因此这里只在 disable 时立即生效，避免用旧矩形误裁剪。
     void EnableScissorRegion(bool enable) override
     {
-        scissor_enabled = enable;
-        if (cb && cb->set_scissor)
-            cb->set_scissor(cb->user,
-                            region.Left(), region.Top(), region.Width(), region.Height(),
-                            enable ? 1 : 0);
+        if (enable) return;
+        scissor_enabled = false;
+        PushScissor();
     }
 
+    // 对照 GL3::SetScissorRegion：区域为空 = 关闭裁剪；否则开启并更新矩形。
     void SetScissorRegion(Rectanglei r) override
     {
         region = r;
-        if (cb && cb->set_scissor)
-            cb->set_scissor(cb->user,
-                            r.Left(), r.Top(), r.Width(), r.Height(),
-                            scissor_enabled ? 1 : 0);
+        scissor_enabled = r.Valid();
+        PushScissor();
     }
 
-    // ---- 图层 / 滤镜（backdrop-filter、filter、mask-image）----
-    // 托管侧负责离屏图层栈与 Skia 滤镜合成；这里只转发句柄。
+    // ================================================================
+    // 高级渲染（RenderInterface.h 第 76-125 行）
+    // ================================================================
 
+    // 对照 GL3::EnableClipMask：开/关 stencil 测试；托管侧用 alpha 遮罩等价实现。
+    void EnableClipMask(bool enable) override
+    {
+        if (cb && cb->enable_clip_mask) cb->enable_clip_mask(cb->user, enable ? 1 : 0);
+    }
+
+    // 对照 GL3::RenderToClipMask：
+    //   Set        → 清空后写入几何区
+    //   SetInverse → 清空为「满」后擦除几何区（保留几何之外）
+    //   Intersect  → 与现有遮罩求交
+    void RenderToClipMask(ClipMaskOperation operation, CompiledGeometryHandle geometry, Vector2f translation) override
+    {
+        auto* g = reinterpret_cast<GeometryData*>(geometry);
+        if (!g || !cb || !cb->render_to_clip_mask) return;
+        cb->render_to_clip_mask(cb->user, (int)operation,
+                                g->verts.data(), (int)g->verts.size(),
+                                g->idx.data(), (int)g->idx.size(),
+                                translation.x, translation.y);
+    }
+
+    // 对照 GL3::SetTransform：matrix 为 RmlUi Matrix4f 的 column-major 16 个 float；
+    // nullptr 表示无变换（identity）。
+    void SetTransform(const Matrix4f* transform) override
+    {
+        if (!cb || !cb->set_transform) return;
+        if (transform)
+            cb->set_transform(cb->user, transform->data(), 0);
+        else
+            cb->set_transform(cb->user, nullptr, 1);
+    }
+
+    // 对照 GL3::PushLayer：新图层初始化为透明，并成为当前渲染目标。
     LayerHandle PushLayer() override
     {
-        if (!cb || !cb->push_layer) return 0;   // 无托管支持 → 退化为基座
+        if (!cb || !cb->push_layer) return 0;
         return (LayerHandle)cb->push_layer(cb->user);
     }
 
-    void PopLayer() override
-    {
-        if (cb && cb->pop_layer) cb->pop_layer(cb->user);
-    }
-
+    // 对照 GL3::CompositeLayers：先对 source 应用滤镜，再按 blend_mode 合成到 destination。
     void CompositeLayers(LayerHandle source, LayerHandle destination,
                          BlendMode blend_mode,
                          Span<const CompiledFilterHandle> filters) override
@@ -223,6 +292,27 @@ public:
                              (int)filters.size());
     }
 
+    // 对照 GL3::PopLayer：渲染目标回退到父图层。
+    void PopLayer() override
+    {
+        if (cb && cb->pop_layer) cb->pop_layer(cb->user);
+    }
+
+    // 对照 GL3::SaveLayerAsTexture：按当前 scissor 区域截取当前图层。
+    TextureHandle SaveLayerAsTexture() override
+    {
+        if (!cb || !cb->save_texture) return 0;
+        return (TextureHandle)cb->save_texture(cb->user);
+    }
+
+    // 对照 GL3::SaveLayerAsMaskImage：把当前图层存为 mask 滤镜。
+    CompiledFilterHandle SaveLayerAsMaskImage() override
+    {
+        if (!cb || !cb->save_mask) return 0;
+        return (CompiledFilterHandle)cb->save_mask(cb->user);
+    }
+
+    // 对照 GL3::CompileFilter：解析标准滤镜参数 + 自定义滤镜的 p0..pN。
     CompiledFilterHandle CompileFilter(const String& name, const Dictionary& parameters) override
     {
         if (!cb || !cb->compile_filter) return 0;
@@ -262,23 +352,98 @@ public:
         if (cb && cb->release_filter) cb->release_filter(cb->user, (uintptr_t)filter);
     }
 
-    CompiledFilterHandle SaveLayerAsMaskImage() override
+    // 对照 GL3::CompileShader：解析 linear/radial/conic-gradient 的参数与色标。
+    // 几何的 tex_coord 就是渐变坐标系（见 DecoratorGradient：vertex.tex_coord =
+    // vertex.position - render_offset），因此托管侧直接用 UV 采样渐变。
+    CompiledShaderHandle CompileShader(const String& name, const Dictionary& parameters) override
     {
-        if (!cb || !cb->save_mask) return 0;
-        return (CompiledFilterHandle)cb->save_mask(cb->user);
+        if (!cb || !cb->compile_shader) return 0;
+
+        int function_type = -1;
+        Vector2f p(0.f), v(0.f);
+        const bool repeating = Rml::Get(parameters, "repeating", false);
+
+        if (name == "linear-gradient")
+        {
+            p = Rml::Get(parameters, "p0", Vector2f(0.f));
+            v = Rml::Get(parameters, "p1", Vector2f(0.f)) - p;
+            function_type = repeating ? 3 : 0;
+        }
+        else if (name == "radial-gradient")
+        {
+            p = Rml::Get(parameters, "center", Vector2f(0.f));
+            const Vector2f radius = Rml::Get(parameters, "radius", Vector2f(1.f));
+            v = Vector2f(1.f) / radius;
+            function_type = repeating ? 4 : 1;
+        }
+        else if (name == "conic-gradient")
+        {
+            p = Rml::Get(parameters, "center", Vector2f(0.f));
+            const float angle = Rml::Get(parameters, "angle", 0.f);
+            v = Vector2f(Rml::Math::Cos(angle), Rml::Math::Sin(angle));
+            function_type = repeating ? 5 : 2;
+        }
+        else
+        {
+            return 0;   // "shader: creation" 等暂不支持
+        }
+
+        std::vector<WG_ColorStop> stops;
+        auto it = parameters.find("color_stop_list");
+        if (it != parameters.end() && it->second.GetType() == Variant::COLORSTOPLIST)
+        {
+            const ColorStopList& list = it->second.GetReference<ColorStopList>();
+            stops.reserve(list.size());
+            for (const ColorStop& stop : list)
+            {
+                if (stop.position.unit != Unit::NUMBER) continue;
+                const ColourbPremultiplied c = stop.color;
+                WG_ColorStop s;
+                s.position = stop.position.number;
+                s.r = c[0] / 255.f;
+                s.g = c[1] / 255.f;
+                s.b = c[2] / 255.f;
+                s.a = c[3] / 255.f;
+                stops.push_back(s);
+            }
+        }
+        if (stops.empty()) return 0;
+
+        return (CompiledShaderHandle)cb->compile_shader(
+            cb->user, name.c_str(), function_type,
+            p.x, p.y, v.x, v.y, stops.data(), (int)stops.size());
     }
 
-    TextureHandle SaveLayerAsTexture() override
+    // 对照 GL3::RenderShader（Gradient 分支）。
+    void RenderShader(CompiledShaderHandle shader, CompiledGeometryHandle geometry,
+                      Vector2f translation, TextureHandle texture) override
     {
-        if (!cb || !cb->save_texture) return 0;
-        return (TextureHandle)cb->save_texture(cb->user);
+        auto* g = reinterpret_cast<GeometryData*>(geometry);
+        if (!g || !cb || !cb->render_shader) return;
+        cb->render_shader(cb->user, (uintptr_t)shader,
+                          g->verts.data(), (int)g->verts.size(),
+                          g->idx.data(), (int)g->idx.size(),
+                          (uintptr_t)texture,
+                          translation.x, translation.y);
     }
 
-    // SetTransform / shader 等 v1 不实现（使用默认行为）。
+    void ReleaseShader(CompiledShaderHandle shader) override
+    {
+        if (cb && cb->release_shader) cb->release_shader(cb->user, (uintptr_t)shader);
+    }
 
 private:
+    // 与 GL3 的 scissor_state 等价：region 无效 = 关闭裁剪。
     bool scissor_enabled = false;
     Rectanglei region;
+
+    void PushScissor()
+    {
+        if (!cb || !cb->set_scissor) return;
+        cb->set_scissor(cb->user,
+                        region.Left(), region.Top(), region.Width(), region.Height(),
+                        scissor_enabled ? 1 : 0);
+    }
 };
 
 // ------------------------------------------------------------------ 系统接口
@@ -533,6 +698,44 @@ void wg_set_event_callback(WG_Context* ctx, void* user, WG_EventFn on_event)
     if (!ctx) return;
     ctx->cb.event_user = user;
     ctx->cb.on_event = on_event;
+}
+
+void wg_set_clip_mask_callbacks(
+    WG_Context* ctx, void* user,
+    WG_EnableClipMaskFn enable_clip_mask,
+    WG_RenderToClipMaskFn render_to_clip_mask)
+{
+    if (!ctx) return;
+    (void)user;   // 复用已注册的 cb.user（与渲染/图层回调同一 user）
+    ctx->cb.enable_clip_mask = enable_clip_mask;
+    ctx->cb.render_to_clip_mask = render_to_clip_mask;
+}
+
+void wg_set_transform_callback(WG_Context* ctx, void* user, WG_SetTransformFn set_transform)
+{
+    if (!ctx) return;
+    (void)user;
+    ctx->cb.set_transform = set_transform;
+}
+
+void wg_set_load_texture_callback(WG_Context* ctx, void* user, WG_LoadTextureFn load_texture)
+{
+    if (!ctx) return;
+    (void)user;
+    ctx->cb.load_tex = load_texture;
+}
+
+void wg_set_shader_callbacks(
+    WG_Context* ctx, void* user,
+    WG_CompileShaderFn compile_shader,
+    WG_RenderShaderFn render_shader,
+    WG_ReleaseShaderFn release_shader)
+{
+    if (!ctx) return;
+    (void)user;
+    ctx->cb.compile_shader = compile_shader;
+    ctx->cb.render_shader = render_shader;
+    ctx->cb.release_shader = release_shader;
 }
 
 void wg_register_filter(WG_Context* ctx, const char* name, int arity)

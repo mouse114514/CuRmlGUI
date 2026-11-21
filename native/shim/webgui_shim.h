@@ -65,6 +65,45 @@ typedef void (*WG_GenerateTextureFn)(
 typedef void (*WG_SetScissorFn)(
     void* user, int x, int y, int width, int height, int enable);
 
+/* ---- 变换（对应 RenderInterface::SetTransform）----
+ * matrix 为 RmlUi Matrix4f 的 column-major 16 个 float；is_identity==1 时 matrix 为 NULL。
+ * 变换只作用于「带几何句柄的绘制」（RenderGeometry / RenderToClipMask），
+ * 不影响 scissor 与 CompositeLayers。 */
+typedef void (*WG_SetTransformFn)(void* user, const float* matrix, int is_identity);
+
+/* ---- 纹理加载（对应 RenderInterface::LoadTexture）----
+ * source 为 RmlUi 解析后的文档内路径。成功时回填宽高并返回纹理句柄（>0），失败返回 0。 */
+typedef uintptr_t (*WG_LoadTextureFn)(
+    void* user, const char* source, int* out_width, int* out_height);
+
+/* ---- Shader（gradient，对应 CompileShader / RenderShader / ReleaseShader）----
+ * function_type: 0=Linear 1=Radial 2=Conic 3=RepeatingLinear 4=RepeatingRadial 5=RepeatingConic
+ * stops 为按位置排序的色标；颜色为 **预乘** RGBA（0..1）。 */
+typedef struct WG_ColorStop {
+    float position;
+    float r, g, b, a;
+} WG_ColorStop;
+
+typedef uintptr_t (*WG_CompileShaderFn)(
+    void* user, const char* name, int function_type,
+    float p_x, float p_y, float v_x, float v_y,
+    const WG_ColorStop* stops, int stop_count);
+
+typedef void (*WG_RenderShaderFn)(
+    void* user, uintptr_t shader,
+    const WG_Vertex* vertices, int vertex_count,
+    const int* indices, int index_count,
+    uintptr_t texture,
+    float translate_x, float translate_y);
+
+typedef void (*WG_ReleaseShaderFn)(void* user, uintptr_t shader);
+
+WG_API void wg_set_shader_callbacks(
+    WG_Context* ctx, void* user,
+    WG_CompileShaderFn compile_shader,
+    WG_RenderShaderFn render_shader,
+    WG_ReleaseShaderFn release_shader);
+
 /* ---- 图层 / 滤镜回调（backdrop-filter、filter、mask-image） ----
  * 托管侧负责真正的离屏图层栈与滤镜合成；shim 只做句柄转发。
  * 约定：所有句柄为 uintptr_t，0 保留给基座图层 / 无效滤镜。
@@ -121,6 +160,22 @@ typedef uintptr_t (*WG_SaveLayerAsMaskImageFn)(void* user);
 /* 把当前图层存为纹理（后续经 RenderGeometry 绘制）。返回纹理句柄（>0）。 */
 typedef uintptr_t (*WG_SaveLayerAsTextureFn)(void* user);
 
+/* ---- 裁剪遮罩（clip mask：圆角裁剪 / clip / overflow 圆角）----
+ * 参照官方 GL3 后端的 stencil 语义，托管侧用一张 alpha 遮罩实现：
+ *   enable=1 后，后续所有带几何的绘制 + CompositeLayers 只保留遮罩内像素。
+ * op: 0=Set（清零后写入几何区） 1=SetInverse（清零后取反写入） 2=Intersect（与现有遮罩相交）。 */
+typedef void (*WG_EnableClipMaskFn)(void* user, int enable);
+typedef void (*WG_RenderToClipMaskFn)(
+    void* user, int op,
+    const WG_Vertex* vertices, int vertex_count,
+    const int* indices, int index_count,
+    float translate_x, float translate_y);
+
+WG_API void wg_set_clip_mask_callbacks(
+    WG_Context* ctx, void* user,
+    WG_EnableClipMaskFn enable_clip_mask,
+    WG_RenderToClipMaskFn render_to_clip_mask);
+
 /* ---- 事件回调 ---- */
 /* eventType: "click" / "mouseover" / "mouseout" / "focus" / "blur" / "change" ...
  * elementId: 目标元素的 id 属性（可能为空字符串）。 */
@@ -157,6 +212,14 @@ WG_API void wg_set_layer_callbacks(
 
 WG_API void wg_set_event_callback(
     WG_Context* ctx, void* user, WG_EventFn on_event);
+
+/* 变换回调：对应 RenderInterface::SetTransform。 */
+WG_API void wg_set_transform_callback(
+    WG_Context* ctx, void* user, WG_SetTransformFn set_transform);
+
+/* 纹理加载回调：对应 RenderInterface::LoadTexture。 */
+WG_API void wg_set_load_texture_callback(
+    WG_Context* ctx, void* user, WG_LoadTextureFn load_texture);
 
 /* ---- 文档 / 尺寸 / 字体 ---- */
 WG_API int  wg_load_document(WG_Context* ctx, const char* rml, const char* rcss);
