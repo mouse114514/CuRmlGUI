@@ -41,6 +41,9 @@ namespace CuRmlGUI.Presentation
         private int _fakeBlurScale = 2;      // Fake 模式降采样除数（默认 1/2）
         private int _fakeBlurRadius = 6;     // Fake 模式盒式平滑半径（降采样后的像素）
 
+        // GPU 玻璃层（抓屏 + 多级 bilinear 模糊 + 圆角 Mask）。
+        private GpuGlassLayer _glass;
+
         private WebGuiView _view;
         private bool _visible;
         private bool _failed;
@@ -146,7 +149,6 @@ namespace CuRmlGUI.Presentation
 
             // Repaint 阶段：UGUI 画布（游戏世界 + 游戏 HUD）已经画进后备缓冲，而 IMGUI
             // 还没画。此处把后备缓冲拷进 RT，得到一张**不含自己 UI** 的干净画面。
-            // 必须在 GUI.DrawTexture 之前调用。
             GrabBackdrop();
 
             var tex = _view.Texture;
@@ -182,11 +184,44 @@ namespace CuRmlGUI.Presentation
             }
         }
 
+        // ------------------------------------------------------------------ GPU 抓屏对齐探针（临时诊断）
+
+        private RenderTexture _probeRt;
+
+        /// <summary>
+        /// 验证 ScreenCapture.CaptureScreenshotIntoRenderTexture 在 URP 下是否 1:1 对齐：
+        /// 把 GPU 抓屏结果缩略画在右上角。与游戏画面一致 = 可以直接用于 GPU 玻璃。
+        /// </summary>
+        private void DrawGpuCaptureProbe()
+        {
+            if (Event.current == null || Event.current.type != EventType.Repaint) return;
+            try
+            {
+                int w = Screen.width, h = Screen.height;
+                if (_probeRt == null || _probeRt.width != w || _probeRt.height != h)
+                {
+                    if (_probeRt != null) { _probeRt.Release(); Destroy(_probeRt); }
+                    _probeRt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32);
+                    _probeRt.Create();
+                }
+
+                ScreenCapture.CaptureScreenshotIntoRenderTexture(_probeRt);
+
+                // 右上角 320x180 预览（临时诊断用）。
+                GUI.DrawTexture(new Rect(w - 330, 10, 320, 180), _probeRt, ScaleMode.ScaleAndCrop, false);
+            }
+            catch (Exception e)
+            {
+                _log?.LogError("[CuRmlGUI] GPU capture probe failed: " + e);
+            }
+        }
+
         // ------------------------------------------------------------------ 生命周期
 
         private void SetVisible(bool visible)
         {
             _visible = visible;
+            if (_glass != null) _glass.Visible = visible;
             if (!visible)
             {
                 // 隐藏时丢弃未消费的抓屏，避免再次显示时套用旧帧。
@@ -286,6 +321,10 @@ namespace CuRmlGUI.Presentation
 
             if (!_view.LoadDocument(PageRml, PageCss.Replace("__FAMILY__", _fontFamily)))
                 _log?.LogError("[CuRmlGUI] LiquidGlass document failed to load.");
+
+            // GPU 玻璃（endCameraRendering）在此游戏不可用：世界/HUD 全在 UGUI，
+            // 相机目标是空的。暂时保留代码，不启用。
+            // _glass = new GpuGlassLayer(); ...
         }
 
         private void LoadFonts()
@@ -680,6 +719,9 @@ namespace CuRmlGUI.Presentation
 
         private void OnDestroy()
         {
+            _glass?.Dispose();
+            _glass = null;
+
             _view?.Dispose();
             _view = null;
 
@@ -704,31 +746,31 @@ namespace CuRmlGUI.Presentation
     </div>
 
     <div id=""widgets"">
-      <div class=""card weather"">
+      <div id=""card-weather"" class=""card weather"">
         <div class=""w-head""><span class=""w-city"">未知星球</span><span class=""w-temp"">-4°</span></div>
         <div class=""w-desc"">多云 · 最高 -1°</div>
         <div class=""w-hours""><span>10时 -3°</span><span>11时 -2°</span><span>12时 0°</span><span>13时 1°</span></div>
       </div>
 
-      <div class=""card music"">
+      <div id=""card-music"" class=""card music"">
         <div class=""album""></div>
         <div class=""m-meta""><span class=""m-title"">Liquid Dreams</span><span class=""m-sub"">CuRmlGUI Radio</span></div>
         <div class=""m-play"">PLAY</div>
       </div>
 
-      <div class=""card cal"">
+      <div id=""card-cal"" class=""card cal"">
         <div class=""cal-day"">21</div>
         <div class=""cal-meta""><span class=""cal-title"">今天</span><span class=""cal-sub"">3 个日程</span></div>
       </div>
 
-      <div class=""card battery"">
+      <div id=""card-battery"" class=""card battery"">
         <div class=""bat-num"">87%</div>
         <div class=""bat-bar""><div class=""bat-fill""></div></div>
         <div class=""bat-sub"">电量 · 预计 6 小时</div>
       </div>
     </div>
 
-    <div class=""card cc"">
+    <div id=""card-cc"" class=""card cc"">
       <div class=""cc-grid"">
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">Wi-Fi</span></label>
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">蓝牙</span></label>
@@ -763,7 +805,7 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 
 #widgets { display: flex; flex-wrap: wrap; width: 660px; justify-content: center; pointer-events: none; }
 
-/* 液态玻璃：中心通透，仅边缘有 specular 高光与厚度 */
+/* 液态玻璃：GPU 玻璃层负责模糊/圆角；RmlUi 只画文字、边框与高光 */
 .card {
   pointer-events: auto;             /* 组件默认可拦截；容器/body 已声明 none */
   background-color: rgba(255,255,255,0.05);
@@ -776,8 +818,6 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
   border-width: 1px;
   border-color: rgba(255,255,255,0.45);
   border-radius: 30px;
-  /* Fake 模式的模糊来自宿主抓屏（FakeBlurRadius）；CSS 半径只影响 scissor 区域与 Real 模式。
-     写 1px 可避免把区域撑大 3 倍。Real 模式请自行改成需要的半径。 */
   backdrop-filter: blur(1px) saturate(180%);
 }
 

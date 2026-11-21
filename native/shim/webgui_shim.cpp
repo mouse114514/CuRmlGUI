@@ -915,6 +915,40 @@ void wg_set_mouse_cursor(WG_Context* /*ctx*/, int /*cursor*/)
     // v1 不处理光标
 }
 
+int wg_get_element_box(WG_Context* ctx, const char* id,
+                       float* out_x, float* out_y, float* out_w, float* out_h)
+{
+    if (!ctx || !ctx->doc || !id) return 0;
+    Element* el = ctx->doc->GetElementById(String(id));
+    if (!el || el->GetNumBoxes() <= 0) return 0;
+
+    const Vector2f origin = el->GetAbsoluteOffset(BoxArea::Border);
+    Vector2f min = origin, max = origin;
+    bool first = true;
+
+    for (int i = 0; i < el->GetNumBoxes(); i++)
+    {
+        Vector2f box_offset;
+        const Box& box = el->GetBox(i, box_offset);
+        const Vector2f p = origin + box_offset;
+        const Vector2f s = box.GetSize(BoxArea::Border);
+        if (first) { min = p; max = p + s; first = false; }
+        else
+        {
+            min.x = p.x < min.x ? p.x : min.x;
+            min.y = p.y < min.y ? p.y : min.y;
+            max.x = p.x + s.x > max.x ? p.x + s.x : max.x;
+            max.y = p.y + s.y > max.y ? p.y + s.y : max.y;
+        }
+    }
+
+    if (out_x) *out_x = min.x;
+    if (out_y) *out_y = min.y;
+    if (out_w) *out_w = max.x - min.x;
+    if (out_h) *out_h = max.y - min.y;
+    return 1;
+}
+
 int wg_should_block_input(WG_Context* ctx, float x, float y)
 {
     if (!ctx || !ctx->ctx) return 0;

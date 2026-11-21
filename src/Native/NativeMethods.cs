@@ -270,6 +270,11 @@ namespace CuRmlGUI.Native
         public static extern int wg_should_block_input(IntPtr ctx, float x, float y);
 
         [DllImport(Dll, CallingConvention = Cc)]
+        public static extern int wg_get_element_box(
+            IntPtr ctx, byte[] id,
+            out float x, out float y, out float width, out float height);
+
+        [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_free_string(IntPtr p);
     }
 }

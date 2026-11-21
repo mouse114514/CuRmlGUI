@@ -265,6 +265,10 @@ WG_API void wg_key_up(WG_Context* ctx, int key, int mods);
 WG_API void wg_text_input(WG_Context* ctx, uint32_t codepoint);
 WG_API void wg_set_mouse_cursor(WG_Context* ctx, int cursor);
 
+/* 查询元素在视口中的边框盒（逻辑像素、左上原点）。返回 1=成功。 */
+WG_API int wg_get_element_box(WG_Context* ctx, const char* id,
+                              float* out_x, float* out_y, float* out_w, float* out_h);
+
 /* ---- 输入命中测试 ----
  * 返回 (x,y) 处是否命中可交互元素（遵循 CSS pointer-events：
  *   元素/祖先 pointer-events:none 且没有子元素重新启用 → 不命中 → 放行）。

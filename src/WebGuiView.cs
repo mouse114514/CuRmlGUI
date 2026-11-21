@@ -446,6 +446,21 @@ select selectbox option:hover {
             return NativeMethods.wg_should_block_input(_ctx, x, y) != 0;
         }
 
+        /// <summary>查询元素的边框盒（左上原点、逻辑像素）。返回 false 表示元素不存在。</summary>
+        public bool GetElementRect(string id, out Rect rect)
+        {
+            rect = default;
+            if (!IsValid || string.IsNullOrEmpty(id)) return false;
+
+            int ok = NativeMethods.wg_get_element_box(
+                _ctx, Utf8.ToNullTerminated(id),
+                out float x, out float y, out float w, out float h);
+            if (ok == 0) return false;
+
+            rect = new Rect(x, y, w, h);
+            return true;
+        }
+
         public void MouseMove(float x, float y)
         {
             if (!IsValid) return;
