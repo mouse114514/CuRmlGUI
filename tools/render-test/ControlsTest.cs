@@ -51,69 +51,61 @@ namespace CuRmlGUI.RenderTest
                 // 背景亮度基准（深背景 #26314d）。
                 int bgSum = 38 + 49 + 77;
 
-                // 1. 选中勾选框为白色玻璃（非饱和彩色）：白玻璃透蓝背景时 B-R 很小，饱和 iOS 蓝会 >150。
-                var cb = AvgColor(bmpD, 64, 14, 76, 26);
-                bool cbWhite = (cb.B - cb.R) < 80 && (cb.R + cb.G + cb.B) > bgSum + 40;
-                Console.WriteLine($"  [{(cbWhite ? "PASS" : "FAIL")}] 选中勾选框为白色玻璃（非彩色） ({cb}, B-R={cb.B - cb.R})");
-                if (!cbWhite) failures++;
+                // 1. 状态区分：未选中（关闭）应比选中（开启）暗——关闭靠"变暗"表示，这是唯一允许的状态区分。
+                double ucMid = AvgLum(bmpD, 14, 16, 26, 24);
+                double cbMid = AvgLum(bmpD, 64, 16, 76, 24);
+                bool stateOk = ucMid < cbMid - 10;
+                Console.WriteLine($"  [{(stateOk ? "PASS" : "FAIL")}] 未选中(关闭)比选中暗 (unchecked={ucMid:F0} < checked={cbMid:F0}-10)");
+                if (!stateOk) failures++;
 
-                // 2. 选中勾选框半透明（两背景下颜色不同 = 背景透出）。
-                var cbL = AvgColor(bmpL, 64, 14, 76, 26);
-                if (!Differs(cb, cbL, 8)) { Console.WriteLine("  [FAIL] 选中勾选框为半透明 (背景无透出)"); failures++; }
-                else Console.WriteLine($"  [PASS] 选中勾选框为半透明 (bg差异 {Diff(cb, cbL)})");
-
-                // 3. 未选中勾选框为白色玻璃 + 半透明。
-                var uc = AvgColor(bmpD, 14, 14, 26, 26);
-                bool ucWhite = (uc.B - uc.R) < 80 && (uc.R + uc.G + uc.B) > bgSum + 8;
-                Console.WriteLine($"  [{(ucWhite ? "PASS" : "FAIL")}] 未选中勾选框为白色玻璃（非彩色） ({uc}, B-R={uc.B - uc.R})");
-                if (!ucWhite) failures++;
-                var ucL = AvgColor(bmpL, 14, 14, 26, 26);
-                if (!Differs(uc, ucL, 8)) { Console.WriteLine("  [FAIL] 未选中勾选框为半透明"); failures++; }
-                else Console.WriteLine($"  [PASS] 未选中勾选框为半透明 (bg差异 {Diff(uc, ucL)})");
-
-                // 4. 滑块进度为白色玻璃（非彩色）+ 半透明。
-                var pr = AvgColor(bmpD, 40, 66, 180, 72);
-                bool prWhite = (pr.B - pr.R) < 80 && (pr.R + pr.G + pr.B) > bgSum + 40;
-                Console.WriteLine($"  [{(prWhite ? "PASS" : "FAIL")}] 滑块进度为白色玻璃（非彩色） ({pr}, B-R={pr.B - pr.R})");
-                if (!prWhite) failures++;
-                var prL = AvgColor(bmpL, 40, 66, 180, 72);
-                if (!Differs(pr, prL, 8)) { Console.WriteLine("  [FAIL] 滑块进度为半透明"); failures++; }
-                else Console.WriteLine($"  [PASS] 滑块进度为半透明 (bg差异 {Diff(pr, prL)})");
-
-                // 5. 圆钮为白色玻璃亮 + 半透明。
-                var th = AvgColor(bmpD, 206, 64, 218, 74);
-                bool thWhite = th.R > 120 && Math.Abs(th.R - th.B) < 40 && (th.B - th.R) < 60;
-                Console.WriteLine($"  [{(thWhite ? "PASS" : "FAIL")}] 滑块圆钮为白色玻璃亮 ({th})");
-                if (!thWhite) failures++;
-                var thL = AvgColor(bmpL, 206, 64, 218, 74);
-                if (!Differs(th, thL, 8)) { Console.WriteLine("  [FAIL] 滑块圆钮为半透明"); failures++; }
-                else Console.WriteLine($"  [PASS] 滑块圆钮为半透明 (bg差异 {Diff(th, thL)})");
-
-                // 6. 未填充轨道半透明。
-                var tr = AvgColor(bmpD, 230, 67, 260, 71);
-                var trL = AvgColor(bmpL, 230, 67, 260, 71);
-                if (!Differs(tr, trL, 8)) { Console.WriteLine("  [FAIL] 未填充轨道为半透明"); failures++; }
-                else Console.WriteLine($"  [PASS] 未填充轨道为半透明 (bg差异 {Diff(tr, trL)})");
-
-                // 7. 高光：勾选框选中顶部 1px 内描边亮线应明显亮于中部填充（box-shadow 边缘高光生效）。
+                // 2. 选中勾选框顶部边缘高光（变亮）：顶部 1px 亮线亮于中部。
                 double cbTop = AvgLum(bmpD, 64, 11, 76, 13);
-                double cbBot = AvgLum(bmpD, 64, 21, 76, 26);
-                bool cbHi = cbTop > cbBot + 8;
-                Console.WriteLine($"  [{(cbHi ? "PASS" : "FAIL")}] 勾选框顶部边缘高光 (top={cbTop:F0} > mid={cbBot:F0}+8)");
+                bool cbHi = cbTop > cbMid + 8;
+                Console.WriteLine($"  [{(cbHi ? "PASS" : "FAIL")}] 选中勾选框顶部高光 (top={cbTop:F0} > mid={cbMid:F0}+8)");
                 if (!cbHi) failures++;
 
-                // 8. 外阴影：勾选框/圆钮正下方阴影带应比远处背景暗（box-shadow 外阴影生效）。
+                // 3. 勾选框外阴影（变暗）：正下方暗于远处背景。
                 double chkUnder = AvgLum(bmpD, 64, 32, 76, 36);
                 double chkFar = AvgLum(bmpD, 64, 40, 76, 44);
-                bool chkShadow = chkUnder < chkFar - 2;
-                Console.WriteLine($"  [{(chkShadow ? "PASS" : "FAIL")}] 勾选框外阴影 (under={chkUnder:F0} < far={chkFar:F0})");
-                if (!chkShadow) failures++;
+                bool chkSh = chkUnder < chkFar - 2;
+                Console.WriteLine($"  [{(chkSh ? "PASS" : "FAIL")}] 勾选框外阴影 (under={chkUnder:F0} < far={chkFar:F0})");
+                if (!chkSh) failures++;
 
+                // 4. 圆钮顶部高光（变亮）：顶部亮线亮于中心（中心透明≈背景）。
+                double thTop = AvgLum(bmpD, 206, 62, 218, 65);
+                double thMid = AvgLum(bmpD, 206, 68, 218, 72);
+                bool thHi = thTop > thMid + 8;
+                Console.WriteLine($"  [{(thHi ? "PASS" : "FAIL")}] 圆钮顶部高光 (top={thTop:F0} > mid={thMid:F0}+8)");
+                if (!thHi) failures++;
+
+                // 5. 圆钮外阴影（变暗）。
                 double thUnder = AvgLum(bmpD, 206, 79, 218, 84);
                 double thFar = AvgLum(bmpD, 206, 92, 218, 96);
-                bool thShadow = thUnder < thFar - 2;
-                Console.WriteLine($"  [{(thShadow ? "PASS" : "FAIL")}] 圆钮外阴影 (under={thUnder:F0} < far={thFar:F0})");
-                if (!thShadow) failures++;
+                bool thSh = thUnder < thFar - 2;
+                Console.WriteLine($"  [{(thSh ? "PASS" : "FAIL")}] 圆钮外阴影 (under={thUnder:F0} < far={thFar:F0})");
+                if (!thSh) failures++;
+
+                // 6. 进度条变亮：进度区亮于背景（已填充用亮表示）。
+                double prLum = AvgLum(bmpD, 40, 66, 180, 72);
+                bool prBright = prLum > bgSum + 20;
+                Console.WriteLine($"  [{(prBright ? "PASS" : "FAIL")}] 进度条变亮 (lum={prLum:F0} > bg={bgSum}+20)");
+                if (!prBright) failures++;
+
+                // 7. 半透明：控件在深/浅背景下不同（透出背景，无实心填充）。
+                var cbD = AvgColor(bmpD, 64, 16, 76, 24);
+                var cbLc = AvgColor(bmpL, 64, 16, 76, 24);
+                failures += Translucent("选中勾选框", cbD, cbLc);
+                var ucD = AvgColor(bmpD, 14, 16, 26, 24);
+                var ucLc = AvgColor(bmpL, 14, 16, 26, 24);
+                failures += Translucent("未选中勾选框", ucD, ucLc);
+                var thD = AvgColor(bmpD, 206, 68, 218, 72);
+                var thLc = AvgColor(bmpL, 206, 68, 218, 72);
+                failures += Translucent("滑块圆钮", thD, thLc);
+
+                // 8. 无彩色：各处 B-R 都很小（纯明暗，无彩色）。
+                bool noColor = (cbD.B - cbD.R) < 80 && (ucD.B - ucD.R) < 80 && (thD.B - thD.R) < 80;
+                Console.WriteLine($"  [{(noColor ? "PASS" : "FAIL")}] 控件无彩色 (B-R: cb={cbD.B - cbD.R}, uc={ucD.B - ucD.R}, th={thD.B - thD.R})");
+                if (!noColor) failures++;
 
                 // 输出控件质感 PNG 供人工查看（深玻璃背景场景）。
                 try
@@ -168,6 +160,14 @@ namespace CuRmlGUI.RenderTest
         /// <summary>最大单通道差。</summary>
         private static int Diff(Color a, Color b) =>
             Math.Max(Math.Max(Math.Abs(a.R - b.R), Math.Abs(a.G - b.G)), Math.Abs(a.B - b.B));
+
+        /// <summary>半透明断言：控件在深/浅背景下颜色不同 = 背景透出（无实心填充）。</summary>
+        private static int Translucent(string name, Color dark, Color light)
+        {
+            bool ok = Differs(dark, light, 8);
+            Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {name}为半透明 (bg差异 {Diff(dark, light)})");
+            return ok ? 0 : 1;
+        }
 
         private static SKBitmap RenderCss(string rml, string css, string fontPath)
         {
@@ -277,28 +277,31 @@ input[type=range] slidertrack { height: 2px; margin-top: 8px; background: rgba(2
 input[type=range] sliderprogress { height: 2px; margin-top: 0px; background: #6ea8ff; border-radius: 1px; }
 input[type=range] sliderbar { width: 16px; height: 16px; margin-top: 1px; margin-left: -8px; margin-right: -8px; border-radius: 8px; background: #ffffff; }
 
-/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：白玻璃 + 边缘高光 + 内/外阴影）—— */
+/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：只做光影，无颜色/填充/边框）—— */
 input[type=checkbox] {
-  width: 20px; height: 20px; background-color: rgba(255,255,255,0.07);
-  border-width: 1px; border-color: rgba(255,255,255,0.28); border-radius: 6px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 1px rgba(0,0,0,0.14), 0 2px 5px rgba(0,0,0,0.45);
+  width: 20px; height: 20px; border-width: 0; border-radius: 6px;
+  background-color: rgba(0,0,0,0.22);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.45),
+              inset 0 -1px 1px rgba(0,0,0,0.30), 0 2px 5px rgba(0,0,0,0.42);
 }
 input[type=checkbox]:checked {
-  background-color: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.55);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.60), inset 0 -1px 1px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.50);
+  background-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.90),
+              inset 0 -1px 1px rgba(0,0,0,0.25), 0 2px 6px rgba(0,0,0,0.50);
 }
 input[type=range] slidertrack {
-  height: 4px; margin-top: 7px; background-color: rgba(255,255,255,0.10);
-  border-radius: 2px; box-shadow: inset 0 1px 1px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.12);
+  height: 4px; margin-top: 7px; border-width: 0; background-color: transparent; border-radius: 2px;
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.35), inset 0 -1px 0 rgba(255,255,255,0.20);
 }
 input[type=range] sliderprogress {
-  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.28);
+  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.22);
   border-radius: 2px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
-  border-radius: 9px; background-color: rgba(255,255,255,0.55);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.75), inset 0 -2px 2px rgba(0,0,0,0.12), 0 3px 7px rgba(0,0,0,0.45);
+  border-radius: 9px; background-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.98), inset 0 0 0 1px rgba(255,255,255,0.30),
+              inset 0 -2px 2px rgba(0,0,0,0.22), 0 3px 8px rgba(0,0,0,0.50);
 }
 input[type=range] sliderarrowdec, input[type=range] sliderarrowinc { display: none; }
 ";

@@ -531,44 +531,49 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .s-label { width: 44px; font-size: 13px; color: rgba(255,255,255,0.72); }
 .cc-slider input { flex: 1; }
 
-/* ==== 控制中心：液态玻璃控件（与 .w-card 面板同源，仅演示页生效） ====
-   颜色沿用主面板白色系 rgba(255,255,255,x)，不使用彩色。
-   高斯模糊由 GPU 玻璃层提供（卡片整块模糊）：控件在卡片内半透明即透出模糊背景。
-   高光/阴影全部用 box-shadow 精做（不用整块渐变——那是老式塑料斜面）：
-     顶部 1px 内描边亮线 = 玻璃边缘反光；底部内暗 = 厚度；外阴影 = 浮起。
-   注意：滑块子元素只用视觉属性，不加 display/position。 */
+/* ==== 控制中心：液态玻璃控件——只做光影（变亮/变暗），无颜色/无填充/无边框 ====
+   主体透明，透出 GPU 模糊背景；仅用 box-shadow 的亮线与暗块塑形：
+     顶部 inset 亮线 = 边缘高光；底部 inset 暗线 = 阴影厚度；外阴影 = 浮起；
+     关闭态（未选中）用内部暗块表示「关」，开启态（选中）透明偏亮。
+   滑块子元素只用视觉属性，不加 display/position。 */
 input[type=checkbox] {
   width: 20px; height: 20px;
-  background-color: rgba(255,255,255,0.07);
-  border-width: 1px;
-  border-color: rgba(255,255,255,0.28);
+  border-width: 0;
   border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.22);          /* 关闭：内部变暗 */
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.55),
-      inset 0 -1px 1px rgba(0,0,0,0.14),
-      0 2px 5px rgba(0,0,0,0.45);
+      inset 0 1px 0 rgba(255,255,255,0.45),        /* 顶部边缘高光（弱） */
+      inset 0 -1px 1px rgba(0,0,0,0.30),           /* 底部内暗 */
+      0 2px 5px rgba(0,0,0,0.42);                  /* 外阴影 */
   vertical-align: -4px;
 }
-input[type=checkbox]:hover { border-color: rgba(255,255,255,0.55); }
-input[type=checkbox]:checked {
-  background-color: rgba(255,255,255,0.16);
-  border-color: rgba(255,255,255,0.55);
+input[type=checkbox]:hover {
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.60),
-      inset 0 -1px 1px rgba(0,0,0,0.16),
+      inset 0 1px 0 rgba(255,255,255,0.55),
+      inset 0 -1px 1px rgba(0,0,0,0.28),
+      0 2px 5px rgba(0,0,0,0.42);
+}
+input[type=checkbox]:checked {
+  background-color: transparent;                   /* 开启：透明偏亮 */
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.90),        /* 顶部边缘高光（强） */
+      inset 0 -1px 1px rgba(0,0,0,0.25),
       0 2px 6px rgba(0,0,0,0.50);
 }
 
 input[type=range] { height: 18px; vertical-align: -4px; }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px;
-  background-color: rgba(255,255,255,0.10);
+  border-width: 0;
+  background-color: transparent;
   border-radius: 2px;
-  box-shadow: inset 0 1px 1px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.12);
+  box-shadow:
+      inset 0 1px 1px rgba(0,0,0,0.35),            /* 凹槽顶部内暗 */
+      inset 0 -1px 0 rgba(255,255,255,0.20);       /* 底部反光 */
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px;
-  background-color: rgba(255,255,255,0.28);
+  background-color: rgba(255,255,255,0.22);        /* 变亮：已填充 */
   border-radius: 2px;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
 }
@@ -577,14 +582,27 @@ input[type=range] sliderbar {
   margin-top: 0px;
   margin-left: -9px; margin-right: -9px;
   border-radius: 9px;
-  background-color: rgba(255,255,255,0.55);
+  background-color: transparent;
   box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.75),
-      inset 0 -2px 2px rgba(0,0,0,0.12),
-      0 3px 7px rgba(0,0,0,0.45);
+      inset 0 1px 0 rgba(255,255,255,0.98),        /* 顶部高光 */
+      inset 0 0 0 1px rgba(255,255,255,0.30),      /* 一圈玻璃边 */
+      inset 0 -2px 2px rgba(0,0,0,0.22),           /* 底部内暗 */
+      0 3px 8px rgba(0,0,0,0.50);                  /* 外阴影 */
 }
-input[type=range] sliderbar:hover { background-color: rgba(255,255,255,0.68); }
-input[type=range] sliderbar:active { background-color: rgba(255,255,255,0.82); }
+input[type=range] sliderbar:hover {
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.90),
+      inset 0 0 0 1px rgba(255,255,255,0.30),
+      inset 0 -2px 2px rgba(0,0,0,0.18),
+      0 3px 8px rgba(0,0,0,0.50);
+}
+input[type=range] sliderbar:active {
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.90),
+      inset 0 0 6px rgba(0,0,0,0.20),
+      inset 0 0 0 1px rgba(255,255,255,0.30),
+      0 3px 8px rgba(0,0,0,0.50);
+}
 
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
 .compat { width: 620px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
