@@ -1,11 +1,15 @@
-# CuRmlGUI 下游模组使用说明
+# CuRmlGUI Integration Guide
 
-> 面向使用 CuRmlGUI 的模组开发者。内部实现见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+[简体中文](INTEGRATION.zh-CN.md) | **English**
 
-## 1. 引入
+This guide is written for mod developers who use CuRmlGUI. Implementation details
+are covered in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-CuRmlGUI 是**库模组**：把它放在 `BepInEx/plugins/CuRmlGUI/`（含 `WebGUINative.dll`、
-SkiaSharp、字体资源），你的模组只引用 `CuRmlGUI.dll`：
+## 1. Referencing the library
+
+CuRmlGUI is a library mod. Place it in `BepInEx/plugins/CuRmlGUI/` together with
+`WebGUINative.dll`, SkiaSharp and the font assets, and reference only
+`CuRmlGUI.dll` from your mod:
 
 ```xml
 <Reference Include="CuRmlGUI">
@@ -14,18 +18,20 @@ SkiaSharp、字体资源），你的模组只引用 `CuRmlGUI.dll`：
 </Reference>
 ```
 
-**不要**把 `CuRmlGUI.dll`/`WebGUINative.dll` 复制进自己的插件目录——原生库与字体
-路径按插件目录解析，重复副本会导致两套原生运行时。
+Do not copy `CuRmlGUI.dll` or `WebGUINative.dll` into your own plugin directory.
+The native library and the font paths are resolved relative to the plugin
+directory, so duplicated copies create two independent native runtimes.
 
-运行时依赖（`SkiaSharp.dll`/`libSkiaSharp.dll`/`System.Memory`/`System.Buffers`）
-由 CuRmlGUI 目录提供；`NativeLoader.EnsureLoaded()` 会安装 **AppDomain 级
-AssemblyResolve**，按简单名从 CuRmlGUI 插件目录解析这些依赖（含 SkiaSharp）。
-因此：
-- 你的模组**不要**复制 `WebGUINative.dll` / `libSkiaSharp.dll` / 字体；
-- 如需自定义滤镜而引用 `SkiaSharp`，只加编译期 `<Reference>` 即可，运行时会由
-  CuRmlGUI 的解析器提供；不要让两个插件各带一份 SkiaSharp。
+Runtime dependencies such as `SkiaSharp.dll`, `libSkiaSharp.dll`, `System.Memory`
+and `System.Buffers` are provided by the CuRmlGUI directory.
+`NativeLoader.EnsureLoaded()` installs an AppDomain-level `AssemblyResolve`
+handler that resolves them, including SkiaSharp, by simple name. As a consequence:
 
-## 2. 最小示例
+- your mod must not ship `WebGUINative.dll`, `libSkiaSharp.dll` or the fonts;
+- if you reference SkiaSharp to build custom filters, add a compile-time
+  `<Reference>` only and let the resolver supply the assembly at runtime.
+
+## 2. Minimal example
 
 ```csharp
 using CuRmlGUI;
@@ -38,31 +44,33 @@ public sealed class MyOverlay : MonoBehaviour
     private void Awake()
     {
         _view = new WebGuiView(Screen.width, Screen.height);
-        WebGuiFonts.LoadDefault(_view);              // Latin + CJK 回退
+        WebGuiFonts.LoadDefault(_view);
         _view.LoadDocument(
             "<rml><body><div id='panel'>Hello</div></body></rml>",
-            "#panel { position:absolute; left:40px; top:40px; padding:12px; " +
-            "background:rgba(20,24,40,0.85); color:#fff; border-radius:10px; }");
+            "#panel { position: absolute; left: 40px; top: 40px; padding: 12px;" +
+            "         background: rgba(20, 24, 40, 0.85); color: #fff; border-radius: 10px; }");
         _view.ElementEvent += (type, id) => Debug.Log($"{type} / {id}");
     }
 
     private void Update()
     {
-        var mp = Input.mousePosition;
-        float x = mp.x, y = Screen.height - mp.y;    // 左上原点
+        Vector3 p = Input.mousePosition;
+        float x = p.x;
+        float y = Screen.height - p.y;          // RmlUi uses a top-left origin
+
         _view.MouseMove(x, y);
         for (int b = 0; b <= 2; b++)
         {
             if (Input.GetMouseButtonDown(b)) _view.MouseDown(x, y, b);
-            if (Input.GetMouseButtonUp(b))   _view.MouseUp(x, y, b);
+            if (Input.GetMouseButtonUp(b)) _view.MouseUp(x, y, b);
         }
-        _view.Update();                               // 有变化才重绘 + 上传纹理
+
+        _view.Update();
     }
 
     private void OnGUI()
     {
         if (_view?.Texture == null) return;
-        // 库统一呈现（含 GPU 玻璃合成与 GUI.depth）；等价于原来的 GUI.DrawTexture。
         _view.PresentOnGui();
     }
 
@@ -70,137 +78,142 @@ public sealed class MyOverlay : MonoBehaviour
 }
 ```
 
-> 需要液态玻璃时，加一行 `_view.EnableGpuGlass(new[] { "panel" });`（见 §7.1）。
+To enable liquid glass, add `_view.EnableGpuGlass(new[] { "panel" });` after loading
+the document; see section 7.1.
 
-## 3. 生命周期与线程
+## 3. Lifetime and threading
 
-- 所有 `WebGuiView` 调用都在 **Unity 主线程**。
-- `new WebGuiView(w,h,dpi)` 创建原生上下文；`Dispose()` 释放（必须）。
-- `SetSize(w,h,dpi)` 在分辨率变化时调用（会重建位图/图层池）。
-- `Update()` 返回本帧是否真的重绘并上传了纹理；不必自己判断脏状态。
-- 不要跨线程调用；不要在 `OnGUI` 里调用 `Update()`。
+- `new WebGuiView(w, h, dpi)` creates the native context and must be paired with
+  `Dispose()`.
+- Call `SetSize(w, h, dpi)` when the resolution changes; it rebuilds the bitmap and
+  the layer pool.
+- `Update()` returns whether this frame actually re-rendered and uploaded the
+  texture. You do not need to track dirty state yourself.
+- Do not call from other threads, and do not call `Update()` inside `OnGUI`.
 
-## 4. 呈现
+## 4. Presentation
 
 ```csharp
-GUI.depth = -1000;  // 尽量靠上；IMGUI 在所有 UGUI 之后绘制
-GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), view.Texture);
+private void OnGUI()
+{
+    if (_view?.Texture == null) return;
+    _view.PresentOnGui();          // includes GPU glass composition and GUI.depth
+}
 ```
 
-`Texture` 是 RGBA32、**bottom-up** 行序，宽高等于 `view.Width/Height`。
-不要把纹理交给 Unity 再缩放——UI 已在 Skia 里按逻辑像素合成好。
+`PresentOnGui` draws the overlay in front of the game. `Texture` is RGBA32 in
+bottom-up row order, and its size equals `view.Width` by `view.Height`. Do not let
+Unity rescale it: the interface is already composited at logical pixel size inside
+Skia.
 
-## 5. 输入
+## 5. Input
 
-坐标：**左上原点、逻辑像素**。
+Coordinates use a top-left origin and logical pixels.
 
 ```csharp
-view.MouseMove(x, y);                 // 内部对未变化坐标去重
-view.MouseDown(x, y, button);         // 0=左 1=右 2=中
+view.MouseMove(x, y);                 // duplicate positions are filtered internally
+view.MouseDown(x, y, button);         // 0 = left, 1 = right, 2 = middle
 view.MouseUp(x, y, button);
 view.MouseWheel(dx, dy);
 view.KeyDown(keyCode, modifiers);     // UnityEngine.KeyCode
 view.KeyUp(keyCode, modifiers);
-view.TextInput(char);                 // 代理对请用 TextInputCodepoint
-view.TextInputCodepoint(uint codePoint);
+view.TextInput(c);                    // use TextInputCodepoint for surrogate pairs
+view.TextInputCodepoint(codePoint);
 ```
 
-键盘/文本：只转发 `Input.inputString` 里的可打印字符；退格/回车等由 `KeyDown` 处理，
-避免重复。修饰键用 `Event.current` 或 `Input.GetKey` 组合。
+Forward only printable characters from `Input.inputString`. Backspace, Return and
+similar keys are already handled by `KeyDown`; forwarding them twice duplicates
+input. Combine modifiers with `Event.current` or `Input.GetKey`.
 
-## 6. 按需渲染与帧率
+## 6. On-demand rendering and frame rate
 
-- 无输入、无动画、无 backdrop 更新时**不重绘、不上传纹理**。
-- `MaxRenderFps`（默认 **50**）同时约束输入/hover 与动画的重绘频率；
-  设为 `0` 表示不限速（不推荐）。
-- 重绘成本与内容复杂度相关；大面积玻璃时建议 20–30。
-- `view.TakeRenderStats()` 返回分项耗时（draw/composite/mask/layers），用于诊断。
+- When there is no input, animation or backdrop update, the view neither re-renders
+  nor uploads a texture.
+- `MaxRenderFps` (default 50) bounds redraws triggered by input, hover and
+  animation. A value of 0 removes the limit and is not recommended.
+- Redraw cost grows with content complexity; 20–30 is a reasonable limit when large
+  glass areas are visible.
+- `view.TakeRenderStats()` returns per-stage timings (`draw`, `composite`, `mask`,
+  `layers`) for diagnosis.
 
-## 7. 液态玻璃与毛玻璃
+## 7. Liquid glass and backdrop filters
 
-### 7.1 GPU 液态玻璃（推荐默认档位）
+### 7.1 GPU liquid glass (recommended)
 
-库内置的液态玻璃：圆角裁剪、真实模糊、边缘折射全部在 GPU 上完成，**不读回 CPU**，
-也不需要 `backdrop-filter` 或任何自定义 shader。
+The built-in glass produces rounded panels with real blur and edge refraction,
+entirely on the GPU. It requires neither a CPU readback nor `backdrop-filter`, and
+it uses no custom shader.
 
 ```csharp
-var view = new WebGuiView(Screen.width, Screen.height);
-
-// 声明需要玻璃背景的元素 id（通常就是卡片）
 var glass = view.EnableGpuGlass(new[] { "card-weather", "card-music" });
-glass.CornerRadius     = 30;   // 圆角半径（屏幕像素）
-glass.BlurStepPixels   = 1f;   // 模糊采样间距（1/8 分辨率像素）；1 = 相邻采样、无重影
-glass.RefractionPixels = 5f;   // 边缘折射强度（屏幕像素）
-
-view.Update();                 // 每帧：自动对齐元素矩形 + 在 GPU 上模糊
+glass.CornerRadius     = 30;   // corner radius in screen pixels
+glass.BlurStepPixels   = 1f;   // sample spacing in 1/8-resolution pixels; 1 = no ghosting
+glass.RefractionPixels = 5f;   // edge refraction strength in screen pixels
 ```
 
-```csharp
-// 呈现：必须在 OnGUI 里（替代直接 GUI.DrawTexture(view.Texture)）
-private void OnGUI() => view.PresentOnGui();
-```
+`Update()` aligns the panels to their elements and performs the blur every frame.
+`PresentOnGui()` handles presentation. The sequence it enforces is: draw the UI
+once with `alpha = 0`, capture the frame into a render texture, draw the glass mesh,
+then draw the UI texture. Because the capture happens before the glass is drawn, the
+glass never captures itself.
 
-`PresentOnGui` 的顺序：`alpha=0` 画一次 UI 触发合帧 →
-`ScreenCapture.CaptureScreenshotIntoRenderTexture` 抓「游戏画面但不含我们 UI」→
-画玻璃网格 → 画 UI。因此玻璃永远不会被自己抓进去（无反馈）。
+Additional notes:
 
-模糊链（全 GPU）：全屏 → 1/2 → 1/4 → 1/8，在 1/8 上做**可分离密集 8 tap 盒式模糊**
-（采样点间距 1 个 1/8 像素，相邻采样不会产生重影），用两两 50% 平均的归约树**等权**合成
-（alpha 恒为 1，**不会整体变暗**，也不需要亮度补偿），再逐级双线性放大回全屏。
+- Each enabled view holds several full-screen render textures, roughly 25 MB at
+  1080p, so one view per screen is recommended.
+- Cards should keep a transparent or very light background and draw only text,
+  borders and highlights; the glass mesh provides the blurred backdrop.
+- Set `glass.Visible = false` while the overlay is hidden to skip capture, blur and
+  drawing.
+- The path relies on the IMGUI `OnGUI` frame-coalescing behaviour. Without IMGUI,
+  use the CPU path in section 7.2.
 
-注意：
+### 7.2 Injected backdrop (CPU fallback)
 
-- 一个屏幕建议只让一个视图启用玻璃（每个实例占用数张全屏 RT）。
-- CSS 里卡片应保持**透明/极淡**背景，只画文字、边框与高光（玻璃由网格提供）。
-- 隐藏 UI 时设 `glass.Visible = false`，可跳过抓屏/模糊/绘制。
-- 该路径依赖 IMGUI 的 `OnGUI` 合帧行为；不用 IMGUI 呈现时请用 7.2 的 CPU 路径。
-
-### 7.2 注入 backdrop（CPU，备用）
-
-`backdrop-filter` 的输入是**你自己抓的游戏画面**；它只作为模糊源，**不会**进入最终纹理。
+`backdrop-filter` blurs pixels that you supply yourself. The backdrop is only a
+blur source and never enters the final texture.
 
 ```csharp
-// rgba: top-down 行序、RGBA8888；destRect 是该图在视口中的逻辑区域
+// rgba: top-down rows, RGBA8888; the destination rect is in viewport coordinates
 view.SetBackdrop(rgba, srcW, srcH, 0, 0, Screen.width, Screen.height);
 view.ClearBackdrop();
 ```
 
-抓屏建议：
+Capture guidance:
 
-- 用 `ScreenCapture.CaptureScreenshotAsTexture()` 在 **OnGUI 的 Repaint 阶段、
-  自己 `GUI.DrawTexture` 之前**抓最终 framebuffer（与屏幕 1:1 对齐，且不含自己的 UI）。
-- 不要从相机目标抓：URP 下 UGUI（世界 + HUD）不在相机目标里，会得到黑屏或错位。
-- 节流：玻璃背景 10–20fps 足够；抓屏是同步读回，成本高于重绘。
+- Use `ScreenCapture.CaptureScreenshotAsTexture()` during the `OnGUI` Repaint phase
+  and before your own `GUI.DrawTexture` call, so the image matches the screen and
+  does not contain your overlay.
+- Do not capture from a camera target: under URP the UGUI world and HUD are not part
+  of the camera target, which yields a black or misaligned image.
+- Throttle the capture to 10–20 fps; readback is synchronous and more expensive than
+  a redraw.
 
-### 7.3 Fake / Real
+### 7.3 Fake and Real blur modes
 
 ```csharp
-view.BackdropBlurMode = BackdropBlurMode.Fake;   // 默认：不执行任何模糊
-view.BackdropBlurMode = BackdropBlurMode.Real;   // Skia 高斯（重）
+view.BackdropBlurMode = BackdropBlurMode.Fake;   // default: no blur filter at all
+view.BackdropBlurMode = BackdropBlurMode.Real;   // Skia Gaussian blur (expensive)
 ```
 
-**Fake 的含义**：compositor 会**跳过** backdrop 链上的 `blur()`，只做双线性放大。
-所以“模糊强度”完全由你给的 backdrop 分辨率/预处理决定。推荐配方：
+In `Fake` mode the compositor skips `blur()` on the backdrop chain and only performs
+bilinear magnification, so the perceived blur depends entirely on the resolution and
+preprocessing of the backdrop you supply. A typical setup downsamples the capture by
+two, applies a separable box filter at that resolution, and lets the compositor scale
+the result to the element.
 
-1. 抓屏降采样 **1/2**，每个目标像素对源 cell 求**等权平均**（盒式降采样，不是点采样）；
-2. 在 1/2 分辨率上做**可分离盒式平滑**（水平+垂直滑动窗口，半径可调，O(N)）；
-3. 交给 `SetBackdrop`，compositor 双线性放大到元素区域。
+`Real` mode costs time proportional to element area: about 2.6 ms for 400×260,
+14.9 ms for 800×520 and 81 ms for the full screen on the CPU.
 
-参考实现：库不再附带 CPU 抓屏示例；日常请直接用 7.1 的 GPU 路径（零 CPU 读回、成本更低）。
+## 8. Custom filters
 
-> Real 模式的成本正比于元素面积：400×260≈2.6ms、800×520≈14.9ms、全屏≈81ms（CPU），
-> 大面积玻璃慎用。
-
-## 8. 自定义滤镜
-
-CSS：`filter: myfilter(p0 p1 ...)` 或 `backdrop-filter: ...`。
-必须在 `LoadDocument` **之前**注册（RmlUi 解析 CSS 时需要 instancer）：
+Register a filter before loading the document, because RmlUi needs the instancer
+while parsing CSS:
 
 ```csharp
 view.RegisterFilter("myfilter", 3, args =>
 {
     float sigma = args[0], tint = args[1], amount = args[2];
-    // 返回 SKImageFilter + 向外溢出的像素
     return new CustomFilterResult(
         SKImageFilter.CreateColorFilter(SKColorFilter.CreateColorMatrix(...)),
         padPx: 0);
@@ -211,11 +224,13 @@ view.RegisterFilter("myfilter", 3, args =>
 .card { filter: myfilter(4 0.2 0.8); }
 ```
 
-- `arity` = CSS 参数个数（0–16）；`args` 顺序与 `p0..pN` 一致。
-- `PadPx` 用于扩大滤镜计算区域（模糊/位移会超出元素 bbox）。
-- 滤镜按顺序应用；`backdrop-filter` 的链只作用于 backdrop（source=基座图层）。
+- `arity` is the number of CSS parameters (0–16) and `args` follows `p0..pN`.
+- `PadPx` widens the filter region, which blur and displacement require because they
+  extend beyond the element box.
+- Filters apply in order. On a `backdrop-filter` chain they only affect the backdrop,
+  that is, the base layer.
 
-## 9. 事件与 DOM
+## 9. Events and DOM
 
 ```csharp
 view.ElementEvent += (type, id) =>
@@ -224,71 +239,83 @@ view.ElementEvent += (type, id) =>
     if (type == "change" && id == "volume") { /* ... */ }
 };
 
-view.SetElementText("status", "已连接");   // 按 id 回写文本（HTML 转义）
+view.SetElementText("status", "Connected");   // replaces text content, HTML-escaped
 ```
 
-RmlUi 没有 JS/DOM 查询 API；需要动态内容时用 `SetElementText` 或重新 `LoadDocument`。
+RmlUi offers no JavaScript or DOM query API. For dynamic content, use
+`SetElementText` or reload the document.
 
-## 10. 输入拦截（点击穿透）
+## 10. Input blocking
 
-我们的 UI 是 IMGUI，不参与 UGUI 射线检测，所以游戏自己的菜单/HUD 会收到同一批点击。
-两种处理方式：
+The overlay is drawn with IMGUI and takes no part in UGUI raycasting, so the game's
+menus and HUD receive the same clicks. There are two complementary mechanisms.
 
-### 10.1 查询式（推荐）
+### 10.1 Query-based blocking (recommended)
 
-用标准 CSS `pointer-events` 声明：**组件默认可交互（拦截）**，容器/背景声明
-`pointer-events: none` 即可放行；子元素仍可显式改回 `auto`。
+Declare intent with standard CSS `pointer-events`. Components are interactive by
+default and therefore block; containers and the background opt out with
+`pointer-events: none`, and children may opt back in with `auto`.
 
 ```css
-#page    { pointer-events: none; }   /* 全屏背景放行 */
-#widgets { pointer-events: none; }   /* 卡片间隙放行 */
-.card    { pointer-events: auto; }   /* 组件拦截（默认值就是 auto） */
+#page    { pointer-events: none; }   /* full-screen background passes clicks */
+#widgets { pointer-events: none; }   /* gaps between cards pass clicks */
+.card    { pointer-events: auto; }   /* interactive component */
 ```
 
 ```csharp
-bool block = view.ShouldBlockInput(x, y);   // 内部即 RmlUi GetElementAtPoint
+bool block = view.ShouldBlockInput(x, y);   // wraps Context::GetElementAtPoint
 ```
 
-命中规则完全由 RmlUi 的 CSS 语义决定：`pointer-events:none` 的元素不命中，
-其子元素若为 `auto` 仍可命中；未命中任何元素 → 放行。
+The result follows RmlUi's CSS semantics exactly: an element with
+`pointer-events: none` does not hit, a descendant with `auto` still hits, and a
+position that hits nothing passes the click through.
 
-### 10.2 拦截层
+### 10.2 Blocking layer
 
-在指针位于可拦截元素上时，启用一张全屏透明 UGUI `Image`（`raycastTarget=true`）
-+ `GraphicRaycaster`，Canvas `sortingOrder` 高于游戏 HUD，让 EventSystem 的射线命中它，
-从而吞掉游戏 UGUI 的点击。指针移到放行区域时**立即关闭**，点击照常穿透。
+While the pointer is over an interactive element, enable a full-screen transparent
+UGUI `Image` with `raycastTarget = true` and a `GraphicRaycaster`, on a canvas whose
+`sortingOrder` is higher than the game HUD. The EventSystem then hits this image
+first and the click never reaches the game. Disable it as soon as the pointer leaves
+an interactive element.
 
-演示页实现见 `LiquidGlassDemo.EnsureInputBlocker` / `UpdateInputBlocker`。
-注意：直接读 `Input.GetMouseButton` 的逻辑（世界交互/相机拖拽）无法被 UGUI 拦截。
+The demo implements this in `LiquidGlassDemo.EnsureInputBlocker` and
+`UpdateInputBlocker`. Note that code reading `Input.GetMouseButton` directly, such
+as world interaction or camera dragging, cannot be blocked through UGUI.
 
-## 11. 字体
+## 11. Fonts
 
 ```csharp
-WebGuiFonts.LoadDefault(view);   // 发行字体：Liberation Sans + Unifont CJK 子集
-// 或：
+WebGuiFonts.LoadDefault(view);   // Liberation Sans + Unifont CJK subset
+// or:
 view.LoadFont(@"C:\Windows\Fonts\msyh.ttc");
 ```
 
-CSS 里必须写 `font-family`（例如 `font-family: "Liberation Sans";`），
-否则 RmlUi 可能不画字形。CJK 子集只含常用字；缺字时请自行加载完整字体。
+Always specify `font-family` in CSS, for example `font-family: "Liberation Sans";`,
+otherwise RmlUi may not draw any glyphs. The bundled CJK subset contains common
+characters only; load a complete font if you need broader coverage.
 
-## 12. 常见坑
+## 12. Common mistakes
 
-1. **CSS 尺寸是 content-box**：`width` 不含 padding/border；写死宽度时记得算上，
-   否则 flex 换行会与预期不同。
-2. **`font-family` 必写**，否则文字可能不显示。
-3. **`backdrop-filter` 需要 backdrop**：没调用 `SetBackdrop` 时玻璃后面是透明的。
-4. **抓屏时机**：必须在自己的 `GUI.DrawTexture` 之前，否则会抓到自己上一帧的 UI。
-5. **不要在非主线程调用**任何 `WebGuiView` 方法。
-6. **`RegisterFilter` 必须在 `LoadDocument` 前**。
-7. **`Update()` 之外的绘制不会发生**；不要在 `OnGUI` 里调用 `Update`。
-8. **`MaxRenderFps=0`** 会每帧全量重绘 + 上传，CPU 占用显著上升。
-9. **拦截层不要常开**：常开会挡住整个屏幕的点击；按 `ShouldBlockInput` 动态开关。
-10. **多实例**：每个 `WebGuiView` 是独立原生上下文；数量多时注意内存与重绘成本。
+1. **CSS sizes are content-box.** `width` excludes padding and border, so fixed
+   widths change flex wrapping compared with border-box assumptions.
+2. **`font-family` is mandatory.** Without it text may not render.
+3. **`backdrop-filter` needs a backdrop.** Without `SetBackdrop` the glass is
+   transparent.
+4. **Capture before drawing.** Capture the screen before your own `GUI.DrawTexture`
+   call, otherwise the overlay appears in the next capture.
+5. **Main thread only.** Do not call any `WebGuiView` method from another thread.
+6. **Register filters before `LoadDocument`.** The instancer must exist while CSS is
+   parsed.
+7. **Rendering happens in `Update()`.** Do not call `Update()` from `OnGUI`.
+8. **`MaxRenderFps = 0` costs CPU.** It re-renders and uploads every frame.
+9. **Do not leave the blocking layer enabled.** A permanently enabled layer blocks
+   the whole screen; toggle it from `ShouldBlockInput`.
+10. **Multiple views are independent.** Each `WebGuiView` owns its native context;
+    more instances mean more memory and redraw cost.
 
-## 13. 参考
+## 13. References
 
-- 演示页：`src/Presentation/LiquidGlassDemo.cs`（iOS 控制台风格、伪模糊、输入拦截）。
-- 最小消费方：`samples/CuRmlGuiSample/`。
-- 能力边界：`docs/MISSING-FEATURES.md`。
-- 架构与渲染语义：`docs/ARCHITECTURE.md`。
+- Demo page: `src/Presentation/LiquidGlassDemo.cs`.
+- Minimal consumer: `samples/CuRmlGuiSample/`.
+- Capability gaps: `docs/MISSING-FEATURES.md`.
+- Architecture and rendering semantics: `docs/ARCHITECTURE.md`.

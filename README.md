@@ -1,114 +1,192 @@
 # CuRmlGUI
 
-给 CU（Casualties: Unknown）模组用的 **HTML/CSS UI 库**。
+[简体中文](README.zh-CN.md) | **English**
 
-用 RML/RCSS（RmlUi 的 HTML/CSS 方言）写界面，由重编译的 **RmlUi 6.3** 解析与布局，
-**SkiaSharp** 光栅化/合成，再经 Unity 纹理桥接到 IMGUI 呈现。
-**只做渲染，绝不执行 JavaScript。**
+CuRmlGUI is a user-interface library for Casualties: Unknown mods. Interfaces are
+described in RML/RCSS — the HTML/CSS dialect implemented by RmlUi — and presented
+through IMGUI. RmlUi handles parsing, styling, layout, events and animation;
+SkiaSharp rasterises and composites the resulting draw commands; a Unity texture
+carries the finished frame into the game.
 
-本插件是「库模组」：默认不注入任何 UI，只负责初始化原生运行时与字体，
-供其他模组通过 `WebGuiView` 使用。仓库内的 `LiquidGlassDemo` 是一个可选的
-iOS 风格「液态玻璃」演示页（配置段仍沿用旧的 `[Spike]` 名称以兼容旧配置）。
+The library does not execute JavaScript. RmlUi contains no script engine, and the
+public API exposes no DOM query language, so all behaviour remains in your mod's
+C# code.
 
-| 文档 | 读者 | 内容 |
-| --- | --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 研究者 / 维护者 | 架构声明：分层、ABI、渲染语义、坐标系、性能模型、设计取舍 |
-| [docs/INTEGRATION.md](docs/INTEGRATION.md) | 下游模组开发者 | 接口用法：生命周期、输入、毛玻璃、自定义滤镜、事件、坑 |
-| [docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md) | 研究者 | 与 RmlUi 官方后端相比仍缺的能力清单 |
+## Features
 
----
+- **HTML/CSS semantics.** Elements, `position`, `margin` and `padding`,
+  `border-radius`, `:hover` and `:active`, `rgba()`, `overflow: hidden`, flexbox
+  (including `flex-wrap`), gradients, transforms, transitions and keyframe
+  animations are provided by RmlUi itself.
+- **Render backend that follows the official RmlUi contract.** Scissor regions,
+  clip masks for rounded clipping, off-screen layers, `filter` and
+  `backdrop-filter`, `mask-image`, gradient shaders and 2D transforms are
+  implemented by mapping each callback of `RmlUi_Renderer_GL3` onto an equivalent
+  Skia operation.
+- **GPU liquid glass.** `EnableGpuGlass` adds rounded, blurred and edge-refracted
+  panels produced entirely on the GPU. The frame is captured into a render
+  texture, blurred by an eight-tap separable filter at one-eighth resolution, and
+  sampled by a procedural rounded-rectangle mesh. There is no CPU readback and no
+  custom shader.
+- **On-demand rendering.** The document is re-rendered and uploaded only when
+  input, document changes or animations require it. `MaxRenderFps` bounds the
+  redraw rate.
+- **Bundled fonts.** Liberation Sans and a Unifont CJK subset ship with the plugin,
+  so Latin and common Chinese text render without additional setup.
 
-## 特性
+## Requirements
 
-- **HTML/CSS 语义**：`<div>`/`<button>`/`<input>`、`position:absolute`、
-  `margin/padding/border-radius`、`:hover/:active`、`rgba()`、`overflow:hidden`、
-  `display:flex`（含 `flex-wrap`）等，由 RmlUi 原生实现。
-- **零 JS**：RmlUi 不含脚本引擎；交互经 C# 事件回调转发。
-- **按 RmlUi 官方后端语义实现渲染接口**：scissor、clip mask（圆角裁剪）、
-  离屏图层、`filter`/`backdrop-filter`、`mask-image`、渐变 shader、变换矩阵，
-  逐条对齐 `RmlUi_Renderer_GL3` 的语义（用 Skia 的等价能力实现）。
-- **真毛玻璃（GPU，推荐默认档位）**：`view.EnableGpuGlass(...)` 一行开启。
-  圆角裁剪、真实模糊、边缘折射全部在 GPU 上完成 —— `alpha=0` 合帧后
-  `ScreenCapture` 抓「游戏画面但不含自己」→ 1/2→1/4→1/8 降采样 →
-  1/8 上**密集 8 tap 可分离盒式模糊**（相邻采样，无重影；等权归约，不会变暗）→
-  逐级放大 → 程序化圆角网格采样。零 CPU 读回、零自定义 shader。
-  也保留 `backdrop-filter` 的 CPU 路径作为备用（伪模糊 / Skia 高斯）。
-- **按需渲染**：无输入、无动画、无 backdrop 更新时不重绘、不上传纹理；
-  `MaxRenderFps` 同时约束输入/hover 与动画的重绘频率。
-- **中文开箱即用**：随插件发行 Liberation Sans（Latin）与 Unifont CJK 子集回退字体。
+- Casualties: Unknown with BepInEx 5 (Unity Mono, .NET Framework 4.7.2).
+- RmlUi 6.3 and SkiaSharp 1.68.3 are pinned; both are built or bundled by the
+  repository.
+- Building from source requires MSVC, CMake, the Windows SDK and the .NET SDK.
 
-## 快速开始
+## Quick start
 
 ```csharp
 using CuRmlGUI;
+using UnityEngine;
 
-var view = new WebGuiView(1280, 720);      // RmlUi 上下文 + 离屏 Skia 合成器
-WebGuiFonts.LoadDefault(view);             // 加载随插件发行的字体
-view.LoadDocument(
-    "<rml><body><div id='hello'>你好</div></body></rml>",
-    "#hello { color: #fff; font-size: 20px; }");
+public sealed class MyOverlay : MonoBehaviour
+{
+    private WebGuiView _view;
 
-view.ElementEvent += (type, id) => Debug.Log($"event {type} / {id}");
+    private void Awake()
+    {
+        _view = new WebGuiView(Screen.width, Screen.height);
+        WebGuiFonts.LoadDefault(_view);
 
-// 可选：GPU 液态玻璃（库推荐默认档位）
-view.EnableGpuGlass(new[] { "hello" });
+        _view.LoadDocument(
+            "<rml><body><div id='panel'>Hello</div></body></rml>",
+            "#panel { position: absolute; left: 40px; top: 40px; padding: 12px;" +
+            "         background: rgba(20, 24, 40, 0.85); color: #fff; border-radius: 10px; }");
 
-// 每帧（主线程）
-view.Update();                             // 有变化才重绘并上传纹理（并驱动玻璃模糊）
+        // Optional: rounded, blurred glass behind the panel.
+        _view.EnableGpuGlass(new[] { "panel" });
 
-// 在 OnGUI 里呈现（含玻璃合成）
-void OnGUI() => view.PresentOnGui();
+        _view.ElementEvent += (type, id) => Debug.Log($"{type} / {id}");
+    }
+
+    private void Update()
+    {
+        Vector3 p = Input.mousePosition;
+        float x = p.x;
+        float y = Screen.height - p.y;          // RmlUi uses a top-left origin
+
+        _view.MouseMove(x, y);
+        for (int b = 0; b <= 2; b++)
+        {
+            if (Input.GetMouseButtonDown(b)) _view.MouseDown(x, y, b);
+            if (Input.GetMouseButtonUp(b)) _view.MouseUp(x, y, b);
+        }
+
+        _view.Update();
+    }
+
+    private void OnGUI()
+    {
+        if (_view?.Texture == null) return;
+        _view.PresentOnGui();
+    }
+
+    private void OnDestroy() => _view?.Dispose();
+}
 ```
 
-输入转发、毛玻璃抓屏、自定义滤镜、输入拦截等见
-[docs/INTEGRATION.md](docs/INTEGRATION.md)。
+## Documentation
 
-## 构建
+| Document | Audience | Contents |
+| --- | --- | --- |
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | Mod developers | Referencing the library, input forwarding, glass, custom filters, hit testing, common mistakes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Maintainers and researchers | Layering, render-interface semantics, coordinate systems, performance model |
+| [docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md) | Researchers | CSS capabilities that RmlUi 6.3 does not provide, and the suggested order of work |
 
-前置：VS Community（MSVC）+ CMake + Windows SDK，.NET SDK，Python（字体子集化，可选）。
+Chinese versions: [README.zh-CN.md](README.zh-CN.md),
+[docs/INTEGRATION.zh-CN.md](docs/INTEGRATION.zh-CN.md),
+[docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md),
+[docs/MISSING-FEATURES.zh-CN.md](docs/MISSING-FEATURES.zh-CN.md).
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/` | Managed library: `WebGuiView`, `SkiaCompositor`, GPU glass, native bindings |
+| `native/` | C ABI shim and the CMake project that builds `WebGUINative.dll` |
+| `third_party/` | RmlUi sources, fetched by `scripts/fetch-rmlui.ps1` (not committed) |
+| `assets/` | Fonts shipped with the plugin |
+| `tools/render-test/` | Offscreen renderer self-test with per-pixel assertions |
+| `tools/perf/` | Micro-benchmarks for drop-shadow and blur paths |
+| `samples/` | Minimal consumer mod |
+| `scripts/` | Fetch, build, deploy and packaging scripts |
+
+## Build
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\fetch-rmlui.ps1   # 拉取 pinned 依赖
-powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1  # native/out/Release/WebGUINative.dll
-powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build # 托管 + 部署到游戏
+powershell -ExecutionPolicy Bypass -File scripts\fetch-rmlui.ps1    # RmlUi 6.3 + local patch
+powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1   # native/out/Release/WebGUINative.dll
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build  # managed build + deploy
 ```
 
-> `build-native.ps1` 在 freetype 弃用警告下可能误退出；可直接调用
-> `cmake --build native\build --config Release`。
+`build-native.ps1` may stop early on a FreeType deprecation warning. In that case,
+build the native project directly:
 
-离屏自检（进游戏前验证渲染）：见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#离屏自检)。
+```powershell
+cmake --build native\build --config Release
+```
 
-## 演示页与配置
+The offscreen self-test runs without the game and validates coordinates, colour
+order, premultiplication, glyph rendering, clipping and backdrop orientation:
 
-`LiquidGlassDemo`（`src/Presentation/LiquidGlassDemo.cs`）是可选的演示页：
-iOS 控制中心式两列玻璃卡片、渐变高光、GPU 液态玻璃、圆角裁剪、表单控件。
-配置位于 `BepInEx/config/com.cu.curmlgui.cfg` 的 `[Spike]` 段（历史名称）：
+```powershell
+dotnet run --project tools\render-test -c Release
+```
 
-| 键 | 默认 | 说明 |
+Copy the freshly built `WebGUINative.dll` into the `render-test` output directory
+before running it; otherwise the test loads a stale copy.
+
+## Demo and configuration
+
+`src/Presentation/LiquidGlassDemo.cs` is an optional demo page in the style of the
+iOS control centre: two columns of glass cards, gradient highlights, GPU liquid
+glass, rounded clipping and form controls. Settings live in the `[Spike]` section
+of `BepInEx/config/com.cu.curmlgui.cfg`.
+
+| Key | Default | Description |
 | --- | --- | --- |
-| `Enabled` | `false` | 启用演示页 |
-| `AutoShow` | `false` | 启动即显示（免按键，供自动化截图） |
-| `ToggleKey` | `F1` | 显隐按键 |
-| `DpiScale` | `1` | dp→px 比例 |
-| `Glass` | `true` | GPU 液态玻璃（推荐默认档位）；关闭后只剩文字/边框 |
+| `Enabled` | `false` | Loads the demo page |
+| `AutoShow` | `false` | Shows the page on startup without a key press |
+| `ToggleKey` | `F1` | Shows or hides the page |
+| `DpiScale` | `1` | dp-to-pixel ratio; use 1.5 or 2 on high-density displays |
+| `Glass` | `true` | Enables GPU liquid glass |
 
-## 性能
+## Performance
 
-实测（游戏内 1920×1080、演示页玻璃全开）：
+Measurements at 1920×1080 with every glass panel visible:
 
-| 指标 | 早期 CPU 玻璃 | 当前 GPU 玻璃 |
+| Item | CPU glass (earlier) | GPU glass (current) |
 | --- | --- | --- |
-| 抓屏 | CPU 读回（8–17 ms，约 15fps） | GPU 拷贝（`CaptureScreenshotIntoRenderTexture`，无读回） |
-| 模糊 | CPU 盒式平滑（约 21 ms/次） | GPU 1/8 密集 8 tap（约 24 次小尺寸 blit/帧） |
-| 纹理上传 | 每帧 8 MB | 玻璃不经 CPU，无上传 |
-| 重绘 | 20 fps 上限 | 20 fps 上限（玻璃模糊每帧更新） |
+| Frame capture | CPU readback, 8–17 ms at about 15 fps | GPU copy into a render texture, no readback |
+| Blur | Separable box filter on the CPU, about 21 ms per run | Eight-tap separable filter at one-eighth resolution, about 24 small blits per frame |
+| Texture upload | 8 MB per frame | None; the glass never reaches the CPU |
+| Overlay redraw | Capped at 20 fps | Capped at 20 fps, with the glass blur refreshed every frame |
 
-性能设计（区域快照、半分辨率滤镜、图层只清 scissor、surface 分桶、GPU 玻璃链）见
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#性能模型)。
+The design behind these numbers is described in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-performance-model).
 
-## 许可
+## Limitations
 
-- CuRmlGUI 代码：MIT（见 `LICENSE`）。
-- RmlUi 6.3：MIT（以 RCDATA 资源内嵌在 `WebGUINative.dll`，运行时 `wg_license()` 可读）。
-- FreeType 2.13.3：FTL/GPLv2 双许可，静态链接。
-- Liberation Sans、Unifont：各自开源许可，随插件发行。
+- No JavaScript and no DOM query API; dynamic content is written through
+  `SetElementText`.
+- Transforms are limited to 2D affine matrices; `perspective` is ignored.
+- The GPU glass path relies on the IMGUI `OnGUI` frame-coalescing behaviour and is
+  intended for one view per screen.
+- Input blocking covers UGUI only. Code that reads `Input.GetMouseButton` directly
+  must handle the overlay itself.
+
+## License
+
+- CuRmlGUI: MIT. See [LICENSE](LICENSE).
+- RmlUi 6.3: MIT, embedded as RCDATA in `WebGUINative.dll`; `wg_license()` returns
+  the notice at runtime.
+- FreeType 2.13.3: FTL/GPLv2 dual license, statically linked.
+- Liberation Sans and Unifont: distributed under their respective open licenses.
