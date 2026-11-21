@@ -120,13 +120,80 @@ namespace CuRmlGUI
 
         // ------------------------------------------------------------------ 文档 / 字体
 
+        /// <summary>
+        /// 表单控件默认外观样式（前置到用户 RCSS，用户样式可覆盖）。
+        ///
+        /// RmlUi 只内置基础元素的 display，不提供 checkbox/radio/slider 等控件的视觉外观：
+        /// 这些控件（或它们的子元素）没有样式时只显示标签文字。这里给出一套通用默认外观，
+        /// 让控件开箱即用。其中 range 滑块由三个子元素构成：
+        ///   slidertrack（槽） / sliderprogress（已填充段） / sliderbar（滑块）。
+        /// 垂直居中按输入高度 20px（track 6px → margin-top 7；thumb 16px → margin-top 2）调校。
+        /// </summary>
+        private const string DefaultControlsCss = @"
+/* ===== CuRmlGUI 表单控件默认外观 ===== */
+input[type=checkbox], input[type=radio] {
+    width: 15px;
+    height: 15px;
+    background: #10142a;
+    border-width: 2px;
+    border-color: #56618c;
+    border-radius: 3px;
+}
+input[type=radio] { border-radius: 8px; }
+input[type=checkbox]:hover, input[type=radio]:hover { border-color: #8fb0ff; }
+input[type=checkbox]:checked, input[type=radio]:checked {
+    background: #6ea8ff;
+    border-color: #6ea8ff;
+}
+input[type=range] slidertrack {
+    display: block;
+    height: 6px;
+    margin-top: 7px;
+    background: #2a3150;
+    border-radius: 3px;
+}
+input[type=range] sliderprogress {
+    display: block;
+    height: 6px;
+    background: #6ea8ff;
+    border-radius: 3px;
+}
+input[type=range] sliderbar {
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    background: #ffffff;
+    border-radius: 8px;
+}
+input[type=range] sliderarrowdec,
+input[type=range] sliderarrowinc {
+    display: block;
+    width: 0px;
+    height: 0px;
+}
+select selectbox {
+    background: #10142a;
+    border-width: 1px;
+    border-color: #3a4166;
+    border-radius: 5px;
+}
+select selectbox option {
+    padding: 4px 8px;
+}
+select selectbox option:checked,
+select selectbox option:hover {
+    background: #2a3150;
+}
+";
+
         public bool LoadDocument(string rml, string rcss = null)
         {
             ThrowIfDisposed();
             bool ok = NativeMethods.wg_load_document(
                 _ctx,
                 Utf8.ToNullTerminated(rml ?? string.Empty),
-                Utf8.ToNullTerminated(rcss ?? string.Empty)) != 0;
+                Utf8.ToNullTerminated(DefaultControlsCss + (rcss ?? string.Empty))) != 0;
             RequestRender();
             return ok;
         }
