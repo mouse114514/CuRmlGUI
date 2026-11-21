@@ -213,6 +213,10 @@ input[type=checkbox]:checked {
               inset 0 -3px 4px rgba(255,255,255,0.80),
               0 3px 8px rgba(0,0,0,0.52);
 }
+input[type=checkbox]:active, input[type=checkbox]:checked:active {
+  background-color: rgba(0,0,0,0.32);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.50), inset 0 -1px 1px rgba(255,255,255,0.08);
+}
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px; border-width: 0; background-color: transparent; border-radius: 2px;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(255,255,255,0.50);
@@ -223,10 +227,14 @@ input[type=range] sliderprogress {
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
-  border-radius: 9px; background-color: transparent;
+  border-radius: 9px; background-color: rgba(255,255,255,0.22);
   box-shadow: inset 0 2px 2px rgba(255,255,255,0.75),
               inset 0 -3px 4px rgba(255,255,255,0.70),
               0 4px 10px rgba(0,0,0,0.55);
+}
+input[type=range] sliderbar:active {
+  background-color: rgba(255,255,255,0.22);
+  box-shadow: inset 0 2px 3px rgba(0,0,0,0.40), inset 0 -1px 1px rgba(255,255,255,0.12);
 }
 input[type=range] sliderarrowdec, input[type=range] sliderarrowinc { display: none; }
 ";

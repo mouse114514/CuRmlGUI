@@ -560,6 +560,14 @@ input[type=checkbox]:checked {
       inset 0 -3px 4px rgba(255,255,255,0.80),     /* 底部环境光反光（亮） */
       0 3px 8px rgba(0,0,0,0.52);                  /* 外侧投影 */
 }
+/* 按下：凹陷——高光减弱、底部环境光消失、内阴影、去掉外阴影（不再浮起） */
+input[type=checkbox]:active,
+input[type=checkbox]:checked:active {
+  background-color: rgba(0, 0, 0, 0.32);
+  box-shadow:
+      inset 0 2px 4px rgba(0,0,0,0.50),            /* 内凹暗 */
+      inset 0 -1px 1px rgba(255,255,255,0.08);     /* 底部环境光近乎消失 */
+}
 
 input[type=range] { height: 18px; vertical-align: -4px; }
 input[type=range] slidertrack {
@@ -582,7 +590,7 @@ input[type=range] sliderbar {
   margin-top: 0px;
   margin-left: -9px; margin-right: -9px;
   border-radius: 9px;
-  background-color: transparent;
+  background-color: rgba(255,255,255,0.22);        /* 与进度条同色 */
   box-shadow:
       inset 0 2px 2px rgba(255,255,255,0.75),      /* 顶部高光 */
       inset 0 -3px 4px rgba(255,255,255,0.70),     /* 底部环境光反光（亮） */
@@ -595,11 +603,10 @@ input[type=range] sliderbar:hover {
       0 4px 10px rgba(0,0,0,0.58);
 }
 input[type=range] sliderbar:active {
+  background-color: rgba(255,255,255,0.22);       /* 与进度条同色（覆盖库默认蓝 #6ea8ff） */
   box-shadow:
-      inset 0 2px 2px rgba(255,255,255,0.75),
-      inset 0 0 6px rgba(0,0,0,0.20),
-      inset 0 -3px 4px rgba(255,255,255,0.70),
-      0 4px 10px rgba(0,0,0,0.58);
+      inset 0 2px 3px rgba(0,0,0,0.40),            /* 按下凹陷：内暗 */
+      inset 0 -1px 1px rgba(255,255,255,0.12);     /* 底部环境光近乎消失 */
 }
 
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
