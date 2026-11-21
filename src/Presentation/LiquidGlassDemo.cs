@@ -33,8 +33,8 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        // 抓屏节流：玻璃背景 12fps（每次抓屏是同步读回，成本高）。
-        private const float CaptureInterval = 1f / 12f;
+        // 抓屏节流：玻璃背景 15fps（CPU 读回，成本高；35% 预算档）。
+        private const float CaptureInterval = 1f / 15f;
         private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
         // 模糊实现方式：Fake=1/2 降采样 + 可分离盒式平滑（加权平均，无高斯）；Real=Skia 高斯。
         private BackdropBlurMode _blurMode = BackdropBlurMode.Fake;
