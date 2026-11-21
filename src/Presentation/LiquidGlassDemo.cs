@@ -616,13 +616,21 @@ input[type=range] sliderbar:active {
 .compat { width: 620px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
 .cp-title { font-size: 15px; font-weight: bold; text-shadow: 0px 2px 4px rgba(0, 0, 0, 0.55); }
 .cp-row { display: flex; margin-top: 14px; }
+/* 按钮：明显填充 + 白边 + 顶部内高光 + 外阴影浮起 + 深色文字（与背景区分） */
 .cp-box {
   flex: 1; height: 44px; border-radius: 12px;
-  text-align: center; line-height: 44px; font-size: 12px; color: #ffffff;
+  text-align: center; line-height: 44px; font-size: 12px;
+  color: rgba(0,0,0,0.75);
+  background-color: rgba(255,255,255,0.60);
+  border-width: 1px;
+  border-color: rgba(255,255,255,0.80);
+  box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.80),
+      0 3px 8px rgba(0,0,0,0.18);
 }
-.cp-shadow  { background-color: rgba(255,255,255,0.10); text-shadow: 1px 1px 2px rgba(0,0,0,0.45); }
-.cp-outline { background-color: rgba(255,255,255,0.10); outline: 2px solid rgba(10,132,255,0.55); }
-.cp-gradient { background: linear-gradient(135deg, rgba(140,180,255,0.40), rgba(200,225,255,0.12) 55%, rgba(140,200,255,0.28)); }
+.cp-shadow  { text-shadow: 0px 2px 3px rgba(0,0,0,0.35); }
+.cp-outline { outline: 2px solid rgba(10,132,255,0.70); }
+.cp-gradient { background: linear-gradient(135deg, rgba(140,180,255,0.60), rgba(200,225,255,0.30) 55%, rgba(140,200,255,0.50)); }
 .cp-outline, .cp-gradient { margin-left: 12px; }
 ";
     }
