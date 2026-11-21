@@ -563,10 +563,10 @@ input[type=checkbox]:checked {
 /* 按下：凹陷——高光减弱、底部环境光消失、内阴影、去掉外阴影（不再浮起） */
 input[type=checkbox]:active,
 input[type=checkbox]:checked:active {
-  background-color: rgba(0, 0, 0, 0.32);
+  background-color: rgba(0, 0, 0, 0.40);
   box-shadow:
-      inset 0 2px 4px rgba(0,0,0,0.50),            /* 内凹暗 */
-      inset 0 -1px 1px rgba(255,255,255,0.08);     /* 底部环境光近乎消失 */
+      inset 0 2px 5px rgba(0,0,0,0.62),            /* 顶部内暗：强凹陷 */
+      inset 0 -2px 3px rgba(255,255,255,0.16);     /* 凹陷底部微光 */
 }
 
 input[type=range] { height: 18px; vertical-align: -4px; }
@@ -603,10 +603,10 @@ input[type=range] sliderbar:hover {
       0 4px 10px rgba(0,0,0,0.58);
 }
 input[type=range] sliderbar:active {
-  background-color: rgba(255,255,255,0.22);       /* 与进度条同色（覆盖库默认蓝 #6ea8ff） */
+  background-color: rgba(255,255,255,0.10);       /* 变暗（覆盖库默认蓝 #6ea8ff） */
   box-shadow:
-      inset 0 2px 3px rgba(0,0,0,0.40),            /* 按下凹陷：内暗 */
-      inset 0 -1px 1px rgba(255,255,255,0.12);     /* 底部环境光近乎消失 */
+      inset 0 2px 5px rgba(0,0,0,0.55),            /* 顶部内暗：强凹陷 */
+      inset 0 -2px 3px rgba(255,255,255,0.16);     /* 凹陷底部微光 */
 }
 
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
