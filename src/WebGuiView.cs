@@ -45,7 +45,7 @@ namespace CuRmlGUI
         /// 不限制的话鼠标划过 UI 就会逼着每帧全量重绘，把游戏帧率拖下去）。
         /// 供模组开发者在代码中按需调整。
         /// </summary>
-        public float MaxRenderFps { get; set; } = 50f;
+        public float MaxRenderFps { get; set; } = 20f;
 
         // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;

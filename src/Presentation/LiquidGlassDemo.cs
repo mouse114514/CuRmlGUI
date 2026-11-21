@@ -33,8 +33,8 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        // 抓屏节流：玻璃背景 30fps（GPU 降采样后读回；每次抓屏仍是同步读回）。
-        private const float CaptureInterval = 1f / 30f;
+        // 抓屏节流：玻璃背景 12fps（每次抓屏是同步读回，成本高）。
+        private const float CaptureInterval = 1f / 12f;
         private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
         // 模糊实现方式：Fake=1/2 降采样 + 可分离盒式平滑（加权平均，无高斯）；Real=Skia 高斯。
         private BackdropBlurMode _blurMode = BackdropBlurMode.Fake;
@@ -776,7 +776,9 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
   border-width: 1px;
   border-color: rgba(255,255,255,0.45);
   border-radius: 30px;
-  backdrop-filter: blur(40px) saturate(180%);
+  /* Fake 模式的模糊来自宿主抓屏（FakeBlurRadius）；CSS 半径只影响 scissor 区域与 Real 模式。
+     写 1px 可避免把区域撑大 3 倍。Real 模式请自行改成需要的半径。 */
+  backdrop-filter: blur(1px) saturate(180%);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }
