@@ -58,10 +58,14 @@ namespace CuRmlGUI.Native
         [UnmanagedFunctionPointer(Cc)]
         public delegate void DrawGeometryFn(
             IntPtr user,
+            UIntPtr geometry,
             IntPtr vertices, int vertexCount,
             IntPtr indices, int indexCount,
             UIntPtr texture,
             float translateX, float translateY);
+
+        [UnmanagedFunctionPointer(Cc)]
+        public delegate void ReleaseGeometryFn(IntPtr user, UIntPtr geometry);
 
         [UnmanagedFunctionPointer(Cc)]
         public delegate void CreateTextureFn(
@@ -199,6 +203,10 @@ namespace CuRmlGUI.Native
 
         [DllImport(Dll, CallingConvention = Cc)]
         public static extern void wg_set_event_callback(IntPtr ctx, IntPtr user, EventFn onEvent);
+
+        [DllImport(Dll, CallingConvention = Cc)]
+        public static extern void wg_set_geometry_callbacks(
+            IntPtr ctx, IntPtr user, ReleaseGeometryFn releaseGeometry);
 
         /// <summary>注册一个通用滤镜（CSS：<c>filter: name(p0 p1 ...)</c>）。须在 LoadDocument 前调用。</summary>
         [DllImport(Dll, CallingConvention = Cc)]

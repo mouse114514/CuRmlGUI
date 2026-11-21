@@ -98,6 +98,7 @@ struct Callbacks
     WG_GenerateTextureFn gen_tex = nullptr;     // GenerateTexture 的预分配
     WG_LoadTextureFn    load_tex = nullptr;     // LoadTexture（文件 → 纹理）
     WG_SetScissorFn     set_scissor = nullptr;  // EnableScissorRegion / SetScissorRegion
+    WG_ReleaseGeometryFn release_geometry = nullptr; // ReleaseGeometry（清理顶点缓存）
 
     // ---- 变换 ----
     WG_SetTransformFn   set_transform = nullptr; // SetTransform
@@ -174,6 +175,7 @@ public:
         auto* g = reinterpret_cast<GeometryData*>(geometry);
         if (!g || !cb || !cb->draw) return;
         cb->draw(cb->user,
+                 (uintptr_t)g,
                  g->verts.data(), (int)g->verts.size(),
                  g->idx.data(), (int)g->idx.size(),
                  (uintptr_t)texture,
@@ -182,7 +184,10 @@ public:
 
     void ReleaseGeometry(CompiledGeometryHandle geometry) override
     {
-        delete reinterpret_cast<GeometryData*>(geometry);
+        auto* g = reinterpret_cast<GeometryData*>(geometry);
+        if (g && cb && cb->release_geometry)
+            cb->release_geometry(cb->user, (uintptr_t)g);
+        delete g;
     }
 
     // 对照 GL3::LoadTexture：读取文件并交给后端建立纹理。
@@ -710,6 +715,13 @@ void wg_set_event_callback(WG_Context* ctx, void* user, WG_EventFn on_event)
     if (!ctx) return;
     ctx->cb.event_user = user;
     ctx->cb.on_event = on_event;
+}
+
+void wg_set_geometry_callbacks(WG_Context* ctx, void* user, WG_ReleaseGeometryFn release_geometry)
+{
+    if (!ctx) return;
+    (void)user;
+    ctx->cb.release_geometry = release_geometry;
 }
 
 void wg_set_clip_mask_callbacks(

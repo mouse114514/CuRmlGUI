@@ -41,13 +41,18 @@ typedef struct WG_Vertex {
 
 /* ---- 渲染回调 ---- */
 
-/* 绘制一批三角面（带纹理）。texture==0 表示纯色(白图)。 */
+/* 绘制一批三角面（带纹理）。geometry 为 RmlUi 的已编译几何句柄（同一句柄的顶点/索引不可变，
+ * 供托管侧缓存 SKVertices）；texture==0 表示纯色。 */
 typedef void (*WG_DrawGeometryFn)(
     void* user,
+    uintptr_t geometry,
     const WG_Vertex* vertices, int vertex_count,
     const int* indices, int index_count,
     uintptr_t texture,
     float translate_x, float translate_y);
+
+/* 几何释放：托管侧据此丢弃该句柄对应的缓存。 */
+typedef void (*WG_ReleaseGeometryFn)(void* user, uintptr_t geometry);
 
 /* 由 RmlUi 生成/提供纹理 RGBA 像素。 */
 typedef void (*WG_CreateTextureFn)(
@@ -212,6 +217,10 @@ WG_API void wg_set_layer_callbacks(
 
 WG_API void wg_set_event_callback(
     WG_Context* ctx, void* user, WG_EventFn on_event);
+
+/* 几何释放回调（用于清理托管侧的顶点缓存）。 */
+WG_API void wg_set_geometry_callbacks(
+    WG_Context* ctx, void* user, WG_ReleaseGeometryFn release_geometry);
 
 /* 变换回调：对应 RenderInterface::SetTransform。 */
 WG_API void wg_set_transform_callback(

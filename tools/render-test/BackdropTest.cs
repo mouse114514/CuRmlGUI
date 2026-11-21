@@ -76,8 +76,8 @@ namespace CuRmlGUI.RenderTest
             var comp = new SkiaCompositor(W, H, flipY: flip) { BackdropBlurMode = mode };
             try
             {
-                s_draw = new NativeMethods.DrawGeometryFn((u, v, vc, i, ic, t, tx, ty) =>
-                    comp.DrawGeometry(v, vc, i, ic, (ulong)t, tx, ty));
+                s_draw = new NativeMethods.DrawGeometryFn((u, g, v, vc, i, ic, t, tx, ty) =>
+                    comp.DrawGeometry((ulong)g, v, vc, i, ic, (ulong)t, tx, ty));
                 s_create = new NativeMethods.CreateTextureFn((u, t, rgba, w, h) =>
                     comp.CreateTexture((ulong)t, rgba, w, h));
                 s_destroy = new NativeMethods.DestroyTextureFn((u, t) => comp.DestroyTexture((ulong)t));

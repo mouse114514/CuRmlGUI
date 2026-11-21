@@ -64,6 +64,7 @@ namespace CuRmlGUI
         private readonly NativeMethods.CompositeLayersFn _compositeLayersFn;
         private readonly NativeMethods.SaveLayerAsMaskImageFn _saveMaskFn;
         private readonly NativeMethods.SaveLayerAsTextureFn _saveTextureFn;
+        private readonly NativeMethods.ReleaseGeometryFn _releaseGeometryFn;
         private readonly NativeMethods.EnableClipMaskFn _enableClipMaskFn;
         private readonly NativeMethods.RenderToClipMaskFn _renderToClipMaskFn;
         private readonly NativeMethods.SetTransformFn _setTransformFn;
@@ -121,6 +122,7 @@ namespace CuRmlGUI
             _compositeLayersFn = OnCompositeLayers;
             _saveMaskFn = OnSaveLayerAsMaskImage;
             _saveTextureFn = OnSaveLayerAsTexture;
+            _releaseGeometryFn = OnReleaseGeometry;
             _enableClipMaskFn = OnEnableClipMask;
             _renderToClipMaskFn = OnRenderToClipMask;
             _setTransformFn = OnSetTransform;
@@ -143,6 +145,7 @@ namespace CuRmlGUI
                 _compositeLayersFn, _saveMaskFn, _saveTextureFn);
 
             NativeMethods.wg_set_event_callback(_ctx, IntPtr.Zero, _eventFn);
+            NativeMethods.wg_set_geometry_callbacks(_ctx, IntPtr.Zero, _releaseGeometryFn);
 
             NativeMethods.wg_set_clip_mask_callbacks(
                 _ctx, IntPtr.Zero, _enableClipMaskFn, _renderToClipMaskFn);
@@ -510,13 +513,13 @@ select selectbox option:hover {
         // ------------------------------------------------------------------ 原生回调实现
 
         private unsafe void OnDrawGeometry(
-            IntPtr user, IntPtr vertices, int vertexCount,
+            IntPtr user, UIntPtr geometry, IntPtr vertices, int vertexCount,
             IntPtr indices, int indexCount,
             UIntPtr texture, float tx, float ty)
         {
             try
             {
-                _compositor.DrawGeometry(vertices, vertexCount, indices, indexCount,
+                _compositor.DrawGeometry((ulong)geometry, vertices, vertexCount, indices, indexCount,
                     (ulong)texture, tx, ty);
             }
             catch (Exception e)
@@ -524,6 +527,12 @@ select selectbox option:hover {
                 // 绝不能让异常穿过原生边界。
                 Debug.LogError("[CuRmlGUI] DrawGeometry failed: " + e);
             }
+        }
+
+        private void OnReleaseGeometry(IntPtr user, UIntPtr geometry)
+        {
+            try { _compositor.ReleaseGeometry((ulong)geometry); }
+            catch (Exception e) { Debug.LogError("[CuRmlGUI] ReleaseGeometry failed: " + e); }
         }
 
         private void OnCreateTexture(IntPtr user, UIntPtr texture, IntPtr rgba, int width, int height)

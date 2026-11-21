@@ -46,6 +46,40 @@ namespace CuRmlGUI.Render
         // ---- 纹理 shader 缓存（文字使用同一图集，避免每帧重复创建 shader）----
         private readonly Dictionary<ulong, SKShader> _textureShaders = new Dictionary<ulong, SKShader>();
 
+        // ---- 已编译几何 → SKVertices 缓存（顶点/索引在 ReleaseGeometry 前不可变）----
+        private readonly struct GeoKey : IEquatable<GeoKey>
+        {
+            public readonly ulong Geometry;
+            public readonly ulong Texture;
+            public GeoKey(ulong geometry, ulong texture) { Geometry = geometry; Texture = texture; }
+            public bool Equals(GeoKey other) => Geometry == other.Geometry && Texture == other.Texture;
+            public override bool Equals(object obj) => obj is GeoKey k && Equals(k);
+            public override int GetHashCode() { unchecked { return (int)(Geometry ^ (Texture * 397)); } }
+        }
+        private readonly Dictionary<GeoKey, SKVertices> _geoCache = new Dictionary<GeoKey, SKVertices>();
+
+        /// <summary>几何释放回调：丢弃该句柄的顶点缓存。</summary>
+        public void ReleaseGeometry(ulong geometry) => RemoveGeometryEntries(k => k.Geometry == geometry);
+
+        private void InvalidateGeometryTexture(ulong texture) => RemoveGeometryEntries(k => k.Texture == texture);
+
+        private void RemoveGeometryEntries(Func<GeoKey, bool> match)
+        {
+            if (_geoCache.Count == 0) return;
+            List<GeoKey> remove = null;
+            foreach (var kv in _geoCache)
+            {
+                if (match(kv.Key))
+                    (remove ??= new List<GeoKey>()).Add(kv.Key);
+            }
+            if (remove == null) return;
+            foreach (var key in remove)
+            {
+                _geoCache[key]?.Dispose();
+                _geoCache.Remove(key);
+            }
+        }
+
         private SKShader GetTextureShader(ulong texture, SKImage image)
         {
             if (_textureShaders.TryGetValue(texture, out var shader) && shader != null)
@@ -103,6 +137,8 @@ namespace CuRmlGUI.Render
         private SKBitmap _clipMaskBitmap;
         private SKCanvas _clipMaskCanvas;
         private SKImage _clipMaskImage;   // FromPixels 缓存（共享位图，不拷贝）；遮罩变更时失效
+        private SKPath _clipMaskPath;     // 单次 Set 的遮罩几何（可直接用 ClipPath，省掉分层+DstIn）
+        private bool _maskedByPath;       // 当前 BeginMaskedDraw 是否使用了 ClipPath
 
         // ---- 性能统计（诊断用；TakeStats 读取后清零）----
         private long _stDraw, _stComposite, _stMask, _stLayer, _stSnapshot, _stFilter;
@@ -330,11 +366,13 @@ namespace CuRmlGUI.Render
             if (_textures.TryGetValue(id, out var old)) old.Dispose();
             _textures[id] = image;
             InvalidateTextureShader(id);
+            InvalidateGeometryTexture(id);
         }
 
         public void DestroyTexture(ulong id)
         {
             InvalidateTextureShader(id);
+            InvalidateGeometryTexture(id);
             if (_textures.TryGetValue(id, out var img))
             {
                 img.Dispose();
@@ -402,6 +440,11 @@ namespace CuRmlGUI.Render
         public void EnableClipMask(bool enable)
         {
             _clipMaskEnabled = enable;
+            if (!enable)
+            {
+                _clipMaskPath?.Dispose();
+                _clipMaskPath = null;
+            }
             _dirty = true;
         }
 
@@ -419,8 +462,12 @@ namespace CuRmlGUI.Render
             EnsureClipMaskSurface();
             if (vertexCount <= 0) return;
 
+            _clipMaskPath?.Dispose();
+            _clipMaskPath = null;
+
             var vp = (WgVertex*)vertices;
-            using (var path = new SKPath())
+            var path = new SKPath();
+            try
             {
                 int triCount = indexCount > 0 ? indexCount : vertexCount;
                 int* ip = (int*)indices;
@@ -478,6 +525,18 @@ namespace CuRmlGUI.Render
                     _clipMaskCanvas.DrawPath(path, paint);
                     _clipMaskCanvas.Restore();
                 }
+
+                // Set（单几何）可以直接用 ClipPath 在所有后续绘制上做裁剪，
+                // 省掉每次绘制的 SaveLayer + 整张 DstIn（圆角遮罩的常见路径）。
+                if (operation == 0)
+                {
+                    _clipMaskPath = path;
+                    path = null;   // 所有权移交给字段
+                }
+            }
+            finally
+            {
+                path?.Dispose();
             }
 
             _clipMaskImage?.Dispose();
@@ -491,7 +550,19 @@ namespace CuRmlGUI.Render
         /// <summary>当前是否需要在绘制前建立遮罩层。</summary>
         private bool BeginMaskedDraw(SKCanvas canvas)
         {
-            if (!_clipMaskEnabled || !_clipMaskValid || _clipMaskBitmap == null) return false;
+            _maskedByPath = false;
+            if (!_clipMaskEnabled) return false;
+
+            // 单次 Set 的圆角遮罩：直接用 ClipPath（无分层、无 DstIn）。
+            if (_clipMaskPath != null)
+            {
+                canvas.Save();
+                canvas.ClipPath(_clipMaskPath, SKClipOperation.Intersect, true);
+                _maskedByPath = true;
+                return true;
+            }
+
+            if (!_clipMaskValid || _clipMaskBitmap == null) return false;
             canvas.SaveLayer();
             return true;
         }
@@ -499,6 +570,13 @@ namespace CuRmlGUI.Render
         /// <summary>用 DstIn 把本层内容乘上遮罩，然后还原遮罩层。</summary>
         private void EndMaskedDraw(SKCanvas canvas)
         {
+            if (_maskedByPath)
+            {
+                _maskedByPath = false;
+                canvas.Restore();
+                return;
+            }
+
             var mask = GetClipMaskImage();
             if (mask == null) { canvas.Restore(); return; }
             using (var paint = new SKPaint { BlendMode = SKBlendMode.DstIn })
@@ -538,11 +616,12 @@ namespace CuRmlGUI.Render
         }
 
         public unsafe void DrawGeometry(
+            ulong geometry,
             IntPtr vertices, int vertexCount,
             IntPtr indices, int indexCount,
             ulong texture, float translateX, float translateY)
         {
-            DrawVertexData(vertices, vertexCount, indices, indexCount, texture, null, translateX, translateY);
+            DrawVertexData(geometry, vertices, vertexCount, indices, indexCount, texture, null, translateX, translateY);
         }
 
         /// <summary>用已编译的渐变 shader 绘制几何（对应官方 RenderShader 的 Gradient 分支）。</summary>
@@ -552,10 +631,11 @@ namespace CuRmlGUI.Render
             ulong texture, float translateX, float translateY)
         {
             if (!_shaders.TryGetValue(shader, out var gradient) || gradient == null) return;
-            DrawVertexData(vertices, vertexCount, indices, indexCount, texture, gradient, translateX, translateY);
+            DrawVertexData(0, vertices, vertexCount, indices, indexCount, texture, gradient, translateX, translateY);
         }
 
         private unsafe void DrawVertexData(
+            ulong geometry,
             IntPtr vertices, int vertexCount,
             IntPtr indices, int indexCount,
             ulong texture, SKShader gradientShader,
@@ -564,16 +644,6 @@ namespace CuRmlGUI.Render
             if (vertexCount <= 0) return;
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
 
-            // 注意：必须使用**精确长度**的数组。SKVertices.CreateCopy 会按数组长度
-            // 读取顶点/索引，复用更大的缓冲会把旧数据一起提交，导致整屏几何错乱。
-            var positions = new SKPoint[vertexCount];
-            var texs = new SKPoint[vertexCount];
-            var colors = new SKColor[vertexCount];
-
-            // RmlUi 的 UV 是归一化 [0,1]，而 Skia 的图片 shader 在顶点路径里
-            // 按「纹理像素坐标」采样（等价于 shader 局部矩阵为单位矩阵）。
-            // 所以这里把 UV 乘上纹理尺寸，得到像素坐标。
-            // 渐变 shader 例外：它的坐标系就是 UV（元素局部坐标），不能缩放。
             SKImage texImage = null;
             bool hasTex = gradientShader == null && texture != 0 && _textures.TryGetValue(texture, out texImage);
             float texW = 1f, texH = 1f;
@@ -583,29 +653,28 @@ namespace CuRmlGUI.Render
                 texH = texImage.Height;
             }
 
-            var vp = (WgVertex*)vertices;
-            for (int i = 0; i < vertexCount; i++)
-            {
-                WgVertex v = vp[i];
-                positions[i] = new SKPoint(v.X + translateX, v.Y + translateY);
-                texs[i] = hasTex ? new SKPoint(v.U * texW, v.V * texH) : new SKPoint(v.U, v.V);
-                colors[i] = Unpremultiply(v.Color);
-            }
-
-            ushort[] idx = null;
-            if (indexCount > 0)
-            {
-                idx = new ushort[indexCount];
-                int* ip = (int*)indices;
-                for (int i = 0; i < indexCount; i++)
-                    idx[i] = (ushort)ip[i];
-            }
-
+            // 已编译几何的顶点/索引在 ReleaseGeometry 前不变：按 (geometry, texture) 缓存
+            // SKVertices，避免每帧为几十次文字/背景绘制重新分配与拷贝。
+            bool cacheable = gradientShader == null && geometry != 0;
             SKVertices sv = null;
+            bool ownSv = false;
             SKPaint paint = null;
             try
             {
-                sv = SKVertices.CreateCopy(SKVertexMode.Triangles, positions, texs, colors, idx);
+                if (cacheable)
+                {
+                    var key = new GeoKey(geometry, texture);
+                    if (!_geoCache.TryGetValue(key, out sv))
+                    {
+                        sv = BuildVertices(vertices, vertexCount, indices, indexCount, hasTex, texW, texH);
+                        _geoCache[key] = sv;
+                    }
+                }
+                else
+                {
+                    sv = BuildVertices(vertices, vertexCount, indices, indexCount, hasTex, texW, texH);
+                    ownSv = true;
+                }
 
                 paint = new SKPaint { IsAntialias = false };
                 if (gradientShader != null)
@@ -621,6 +690,8 @@ namespace CuRmlGUI.Render
                 bool masked = BeginMaskedDraw(canvas);
                 canvas.Save();
                 if (!_transform.IsIdentity) canvas.Concat(ref _transform);
+                // 顶点保存为局部坐标（便于缓存）；平移在画布上做，等价于 transform(T(p+t))。
+                canvas.Translate(translateX, translateY);
                 // 关键：DrawVertices 的第二个参数是「纹理 × 顶点色」的**组合**模式，
                 // 而不是与画布的输出混合模式（输出混合由 paint.BlendMode 负责，默认 SrcOver）。
                 //   SrcOver = texture over vertexColor → 纹理透明处会露出不透明的顶点色
@@ -634,10 +705,41 @@ namespace CuRmlGUI.Render
             finally
             {
                 paint?.Dispose();
-                sv?.Dispose();
+                if (ownSv) sv?.Dispose();   // 缓存项由 _geoCache 持有，不能在这里 Dispose
                 _stDraw += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
                 _cDraw++;
             }
+        }
+
+        private unsafe SKVertices BuildVertices(
+            IntPtr vertices, int vertexCount,
+            IntPtr indices, int indexCount,
+            bool hasTex, float texW, float texH)
+        {
+            // 必须使用**精确长度**的数组：SKVertices.CreateCopy 按数组长度读取。
+            var positions = new SKPoint[vertexCount];
+            var texs = new SKPoint[vertexCount];
+            var colors = new SKColor[vertexCount];
+
+            var vp = (WgVertex*)vertices;
+            for (int i = 0; i < vertexCount; i++)
+            {
+                WgVertex v = vp[i];
+                positions[i] = new SKPoint(v.X, v.Y);
+                texs[i] = hasTex ? new SKPoint(v.U * texW, v.V * texH) : new SKPoint(v.U, v.V);
+                colors[i] = Unpremultiply(v.Color);
+            }
+
+            ushort[] idx = null;
+            if (indexCount > 0)
+            {
+                idx = new ushort[indexCount];
+                int* ip = (int*)indices;
+                for (int i = 0; i < indexCount; i++)
+                    idx[i] = (ushort)ip[i];
+            }
+
+            return SKVertices.CreateCopy(SKVertexMode.Triangles, positions, texs, colors, idx);
         }
 
         // ------------------------------------------------------------------ 图层栈
@@ -1601,6 +1703,9 @@ namespace CuRmlGUI.Render
 
             foreach (var kv in _textureShaders) kv.Value?.Dispose();
             _textureShaders.Clear();
+
+            foreach (var kv in _geoCache) kv.Value?.Dispose();
+            _geoCache.Clear();
 
             foreach (var kv in _textures) kv.Value.Dispose();
             _textures.Clear();

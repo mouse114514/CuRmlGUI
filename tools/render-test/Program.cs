@@ -45,6 +45,7 @@ namespace CuRmlGUI.RenderTest
         private static NativeMethods.RenderShaderFn s_renderShader;
         private static NativeMethods.ReleaseShaderFn s_releaseShader;
         private static NativeMethods.LoadTextureFn s_loadTexture;
+        private static NativeMethods.ReleaseGeometryFn s_releaseGeometry;
 
         private const int W = 420;
         private const int H = 320;
@@ -83,8 +84,8 @@ namespace CuRmlGUI.RenderTest
 
             s_compositor = new SkiaCompositor(W, H, flipY: flip);
 
-            s_draw = (u, v, vc, i, ic, t, tx, ty) =>
-                s_compositor.DrawGeometry(v, vc, i, ic, (ulong)t, tx, ty);
+            s_draw = (u, g, v, vc, i, ic, t, tx, ty) =>
+                s_compositor.DrawGeometry((ulong)g, v, vc, i, ic, (ulong)t, tx, ty);
             s_create = (u, t, rgba, w, h) => s_compositor.CreateTexture((ulong)t, rgba, w, h);
             s_destroy = (u, t) => s_compositor.DestroyTexture((ulong)t);
             s_generate = (u, t, w, h) => { };
@@ -129,6 +130,7 @@ namespace CuRmlGUI.RenderTest
                 lh = 0;
                 return UIntPtr.Zero;
             };
+            s_releaseGeometry = (u, g) => s_compositor.ReleaseGeometry((ulong)g);
 
             s_ctx = NativeMethods.wg_context_create(W, H, 1f);
             if (s_ctx == IntPtr.Zero)
@@ -148,6 +150,7 @@ namespace CuRmlGUI.RenderTest
                 s_compileShader, s_renderShader, s_releaseShader);
             NativeMethods.wg_set_load_texture_callback(s_ctx, IntPtr.Zero, s_loadTexture);
             NativeMethods.wg_set_event_callback(s_ctx, IntPtr.Zero, s_event);
+            NativeMethods.wg_set_geometry_callbacks(s_ctx, IntPtr.Zero, s_releaseGeometry);
 
             if (File.Exists(font))
                 Console.WriteLine("load_font = " +
