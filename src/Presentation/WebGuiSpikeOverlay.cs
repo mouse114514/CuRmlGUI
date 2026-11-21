@@ -33,10 +33,8 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        private float _nextCapture;
         private const float CaptureInterval = 1f / 15f;   // 15fps 节流
-        private const int BackdropScale = 2;              // Real 模式降采样 1/2（更清晰，玻璃后内容可辨）
-        private bool _backdropFlipV = true;               // 截图行序是否为 bottom-up（需翻转）
+        private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
 
         // 模糊实现方式：Real=Skia 高斯；Fake=超低采样+双线性放大。
         private BackdropBlurMode _blurMode = BackdropBlurMode.Real;
@@ -100,7 +98,11 @@ namespace CuRmlGUI.Presentation
                 EnsureSize();
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                if (_backdropCapture) CaptureBackdrop();
+                if (_backdropCapture)
+                {
+                    ReadBackdrop();
+                    RequestBackdropCapture();
+                }
                 sw.Stop();
                 var sw2 = System.Diagnostics.Stopwatch.StartNew();
                 bool updated = _view.Update();
@@ -144,6 +146,11 @@ namespace CuRmlGUI.Presentation
         {
             if (_failed || !_visible || _mode != PresentationMode.ImGui || _view == null)
                 return;
+
+            // Repaint 阶段：UGUI 画布（游戏世界 + 游戏 HUD）已经画进后备缓冲，而 IMGUI
+            // 还没画。此处把后备缓冲拷进 RT，得到一张**不含自己 UI** 的干净画面。
+            // 必须在 GUI.DrawTexture 之前调用。
+            GrabBackdrop();
 
             var tex = _view.Texture;
             if (tex == null) return;
@@ -307,465 +314,96 @@ namespace CuRmlGUI.Presentation
 
         // ------------------------------------------------------------------ backdrop 捕获（真·毛玻璃）
 
-        // 抓屏方式：ScreenCapture 抓最终 framebuffer（世界 + 游戏自己的 ScreenSpaceOverlay UI），
-        // 这层 UI 在所有相机之后才绘制，任何「复制相机渲染到 RT」的做法都拿不到它。
+        // 游戏世界与 HUD 全部由 UGUI ScreenSpaceOverlay 画布绘制（相机只清屏）。
+        // 绘制顺序：相机 → UGUI 画布（游戏世界 + HUD）→ 【此刻】→ IMGUI（我们自己）。
         //
-        // 抓到的画面里也包含**我们自己画的 UI**。若直接注入，玻璃面板会把「自己的上一帧」当作
-        // 模糊源 → 自我模糊反馈（颜色外溢、越来越不透明、与真实背景脱节）。
+        // 在 OnGUI 的 Repaint 阶段（GUI.DrawTexture 之前）调用
+        // ScreenCapture.CaptureScreenshotAsTexture()：它读取的是**最终屏幕**，与真实画面
+        // 1:1 对齐；且此刻我们的 IMGUI 尚未绘制，所以画面里**从不包含自己**。
         //
-        // 处理：按自己 UI 的 alpha 蒙版把这些像素剔除，用最近的干净像素填充（见
-        // <see cref="ExcludeOwnUi"/>）。填充的接缝随后被模糊抹平，肉眼不可见。
+        // 不能用 Graphics.Blit(null, rt)：URP 下它在 OnGUI 阶段读到的是中间渲染目标
+        // （缩放/错位），导致背景「放大/裁剪/错位」。ScreenCapture 读最终屏幕，坐标天然正确。
         //
-        // 为什么不改成「隐藏自己几帧再抓」：那样隐藏帧会直接呈现在屏幕上，按 15fps 抓屏
-        // 计算要隐藏掉 20%+ 的画面帧，表现为整个 UI 持续闪烁，且低帧率下无法保证间隙。
-        // 蒙版剔除不隐藏任何帧，代价只在 CPU 上（一次平滑填充 + 区域内存拷贝）。
+        // 画面本身不含自己 UI → 无需「蒙版剔除 + 图像修补」，X 形变形从根上消失。
         private byte[] _backdropRgba;
-        private byte[] _uiRgba;           // backdrop-filter 区域对应的 UI 位图子矩形（避免整张拷贝）
-        private int[] _fillSrc;           // 0=干净；1=被自己 UI 覆盖、需填充
-        private int[] _seedSrc;           // 覆盖像素的最近干净源索引 +1；0=未播种
-        private int[] _bfsQueue;          // 播种用的 FIFO 缓冲
+        private Texture2D _pendingShot;   // 已抓屏、待读回像素
+        private bool _grabRequested;       // 已排队，等 OnGUI 抓
+        private float _nextCapture;
 
-        /// <summary>
-        /// 节流抓取画面（世界 + 游戏 UI），注入 view 作为 backdrop 模糊源。
-        /// Real 模式降采样 1/4；Fake 模式用 <see cref="CaptureDivisor"/>（默认 1/16）——
-        /// 极低采样率 + 放大 = 伪模糊。
-        /// </summary>
-        private void CaptureBackdrop()
+        /// <summary>OnGUI Repaint 阶段抓取最终屏幕（不含我们的 IMGUI），留待下一帧读回。</summary>
+        private void GrabBackdrop()
         {
-            if (Time.time < _nextCapture) return;
-
-            Texture2D shot = null;
+            if (!_grabRequested) return;
+            if (Event.current == null || Event.current.type != EventType.Repaint) return;
+            _grabRequested = false;
             try
             {
-                shot = ScreenCapture.CaptureScreenshotAsTexture();
-                if (shot == null || shot.width <= 0 || shot.height <= 0)
-                {
-                    // 抓屏失败：限流重试，避免逐帧空转。
-                    // （CaptureScreenshotAsTexture 首帧会返回 null；若持续失败，不逐帧烧 CPU。）
-                    _nextCapture = Time.time + 0.5f;
-                    return;
-                }
-
-                int divisor = CaptureDivisor;
-                int dw = Mathf.Max(1, shot.width / divisor);
-                int dh = Mathf.Max(1, shot.height / divisor);
-
-                int stride = dw * dh * 4;
-                if (_backdropRgba == null || _backdropRgba.Length != stride)
-                    _backdropRgba = new byte[stride];
-                Downsample(shot, shot.width, shot.height, dw, dh, divisor, _backdropRgba);
-                byte[] rgba = _backdropRgba;
-
-                // GetPixels32 行序为 bottom-up（第 0 行=屏幕底部）；SetBackdrop 契约为 top-down。
-                if (_backdropFlipV) FlipRowsV(rgba, dw, dh);
-
-                // 抓到的画面含我们自己的 UI，必须先剔除，否则玻璃会模糊到自己。
-                ExcludeOwnUi(rgba, dw, dh);
-
-                // 目标区域铺满整个视口（源是降采样图，需拉伸）；否则 backdrop 只覆盖左上角，
-                // 玻璃若位于视口右侧则模糊源为空。
-                _view.SetBackdrop(rgba, dw, dh, 0, 0, Screen.width, Screen.height);
-                _nextCapture = Time.time + CaptureInterval;
+                if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
+                _pendingShot = ScreenCapture.CaptureScreenshotAsTexture();
             }
             catch (Exception e)
             {
-                _log?.LogError("[CuRmlGUI] Backdrop capture failed: " + e);
-                _nextCapture = Time.time + 1f;   // 失败退避
+                _log?.LogError("[CuRmlGUI] Backdrop grab failed: " + e);
+                _nextCapture = Time.unscaledTime + 1f;
+            }
+        }
+
+        /// <summary>按节流间隔排队一次抓取；实际截屏在 <see cref="GrabBackdrop"/> 里做。</summary>
+        private void RequestBackdropCapture()
+        {
+            if (_grabRequested || _pendingShot != null) return;
+            if (Time.unscaledTime < _nextCapture) return;
+            _nextCapture = Time.unscaledTime + CaptureInterval;
+            _grabRequested = true;
+        }
+
+        /// <summary>上一帧已截屏：读回像素、降采样、翻转为 top-down 后注入 view。</summary>
+        private void ReadBackdrop()
+        {
+            if (_pendingShot == null) return;
+            var shot = _pendingShot;
+            _pendingShot = null;
+            try
+            {
+                int sw = shot.width, sh = shot.height;
+                int dw = Mathf.Max(1, sw / CaptureDivisor);
+                int dh = Mathf.Max(1, sh / CaptureDivisor);
+
+                int n = dw * dh * 4;
+                if (_backdropRgba == null || _backdropRgba.Length != n)
+                    _backdropRgba = new byte[n];
+
+                // GetPixels32 行序为 bottom-up（第 0 行 = 屏幕底部）。
+                var px = shot.GetPixels32();
+                for (int y = 0; y < dh; y++)
+                {
+                    int srcRow = (y * sh / dh) * sw;
+                    int dstRow = y * dw;
+                    for (int x = 0; x < dw; x++)
+                    {
+                        var c = px[srcRow + x * sw / dw];
+                        int o = (dstRow + x) * 4;
+                        _backdropRgba[o] = c.r;
+                        _backdropRgba[o + 1] = c.g;
+                        _backdropRgba[o + 2] = c.b;
+                        _backdropRgba[o + 3] = c.a;
+                    }
+                }
+
+                // bottom-up → top-down（SetBackdrop 契约）。
+                FlipRowsV(_backdropRgba, dw, dh);
+
+                // 目标区域铺满整个视口（源是降采样图，需拉伸）。
+                _view.SetBackdrop(_backdropRgba, dw, dh, 0, 0, Screen.width, Screen.height);
+            }
+            catch (Exception e)
+            {
+                _log?.LogError("[CuRmlGUI] Backdrop readback failed: " + e);
+                _nextCapture = Time.unscaledTime + 1f;
             }
             finally
             {
-                if (shot != null) UnityEngine.Object.Destroy(shot);
-            }
-        }
-
-        /// <summary>
-        /// 从 backdrop 里剔除「我们自己的 UI」：按 alpha 蒙版找出被覆盖的像素，
-        /// 再用**拉普拉斯扩散**（smooth inpainting）从覆盖区边界向内填上平滑延拓色。
-        ///
-        /// 玻璃若直接模糊这些像素，会把上一帧的自己当模糊源 → 自我反馈。
-        ///
-        /// 为什么不用 BFS（最近干净邻居扩散）：BFS 把覆盖区的每个像素填成**最近干净邻居**的颜色，
-        /// 于是玻璃下方高对比的结构（金字塔的竖条纹、明暗交界）会被**垂直拉伸**进玻璃区域，
-        /// 形成沙漏/X 形条纹（用户报告的"两条对角线切成 4 个色块"）。
-        ///
-        /// 只处理 backdrop-filter 实际采样的区域（<see cref="WebGuiView.BackdropRegions"/>）：
-        /// 其余区域的 backdrop 不会被任何元素采样，无需剔除。
-        /// </summary>
-        private void ExcludeOwnUi(byte[] rgba, int dw, int dh)
-        {
-            IntPtr px = _view.Pixels;
-            if (px == IntPtr.Zero) return;
-
-            int W = _view.Width, H = _view.Height;
-            if (W <= 0 || H <= 0) return;
-
-            var regions = _view.BackdropRegions;
-            if (regions == null || regions.Count == 0) return;   // 无 backdrop-filter：无需剔除
-
-            int n = dw * dh;
-            if (_fillSrc == null || _fillSrc.Length != n)
-                _fillSrc = new int[n];
-            Array.Clear(_fillSrc, 0, n);
-
-            // 蒙版按区域构建：只有这些区域的 backdrop 会被模糊采样。
-            foreach (var region in regions)
-            {
-                BuildMaskInRegion(px, W, H, rgba, dw, dh, region);
-            }
-
-            // 覆盖像素只可能落在 backdrop 采样区内，直接取区域并集当包围盒（O(区域数)），
-            // 避免 O(dw×dh) 全图扫描。区域是视口坐标，需折算到降采样后的 backdrop 坐标。
-            int minX = dw, minY = dh, maxX = -1, maxY = -1;
-            foreach (var region in regions)
-            {
-                int rx0 = Mathf.Clamp(region.X * dw / W, 0, dw);
-                int ry0 = Mathf.Clamp(region.Y * dh / H, 0, dh);
-                int rx1 = Mathf.Clamp((region.X + region.Width) * dw / W, 0, dw);
-                int ry1 = Mathf.Clamp((region.Y + region.Height) * dh / H, 0, dh);
-                if (rx0 < minX) minX = rx0;
-                if (ry0 < minY) minY = ry0;
-                if (rx1 > maxX) maxX = rx1 - 1;
-                if (ry1 > maxY) maxY = ry1 - 1;
-            }
-            if (maxX < 0) return;
-
-            // 扩散网格的外扩与干净环：Pad 让边缘覆盖像素也有已知邻居，
-            // GrowToCleanRing 保证边界上有已知值（否则迭代只在覆盖值之间同化）。
-            const int Pad = 24;
-            minX = Math.Max(0, minX - Pad);
-            minY = Math.Max(0, minY - Pad);
-            maxX = Math.Min(dw - 1, maxX + Pad);
-            maxY = Math.Min(dh - 1, maxY + Pad);
-            GrowToCleanRing(dw, dh, ref minX, ref minY, ref maxX, ref maxY);
-
-            // 全图 BFS 播种：给 bbox 内每个覆盖像素记下最近干净源。
-            // 限制在 bbox 内即可——bbox 边界环已是干净像素，BFS 由环向内传播，
-            // 无需（也不该）扫描整张 518k 像素的 backdrop。
-            SeedNearestClean(dw, dh, minX, minY, maxX, maxY);
-
-            InpaintHarmonic(rgba, dw, dh, minX, minY, maxX, maxY);
-        }
-
-        /// <summary>
-        /// BFS 播种：从「与覆盖像素相邻的干净像素」出发向内扩散，给 bbox 内每个覆盖像素
-        /// 记录最近干净源的索引（<see cref="_seedSrc"/> = 索引 + 1）。成本 O(bbox 内覆盖像素数)。
-        /// 播种只用于**初始化**，最终颜色由后续的拉普拉斯扩散给出。
-        /// </summary>
-        private void SeedNearestClean(int dw, int dh, int minX, int minY, int maxX, int maxY)
-        {
-            int n = dw * dh;
-            if (_seedSrc == null || _seedSrc.Length != n)
-            {
-                _seedSrc = new int[n];
-                _bfsQueue = new int[n];
-            }
-            // 只清 bbox 内（其余位置上一帧的值不会被读取）。
-            for (int y = minY; y <= maxY; y++)
-                Array.Clear(_seedSrc, y * dw + minX, maxX - minX + 1);
-
-            int head = 0, tail = 0;
-            for (int y = minY; y <= maxY; y++)
-            {
-                int row = y * dw;
-                for (int x = minX; x <= maxX; x++)
-                {
-                    int i = row + x;
-                    if (_fillSrc[i] != 1) continue;
-
-                    int src = -1;
-                    if (x > 0 && _fillSrc[i - 1] == 0) src = i - 1;
-                    else if (x < dw - 1 && _fillSrc[i + 1] == 0) src = i + 1;
-                    else if (y > 0 && _fillSrc[i - dw] == 0) src = i - dw;
-                    else if (y < dh - 1 && _fillSrc[i + dw] == 0) src = i + dw;
-
-                    if (src >= 0)
-                    {
-                        _seedSrc[i] = src + 1;
-                        _bfsQueue[tail++] = i;
-                    }
-                }
-            }
-
-            while (head < tail)
-            {
-                int i = _bfsQueue[head++];
-                int v = _seedSrc[i];
-                int x = i % dw, y = i / dw;
-                if (x > 0 && _fillSrc[i - 1] == 1 && _seedSrc[i - 1] == 0)
-                { _seedSrc[i - 1] = v; _bfsQueue[tail++] = i - 1; }
-                if (x < dw - 1 && _fillSrc[i + 1] == 1 && _seedSrc[i + 1] == 0)
-                { _seedSrc[i + 1] = v; _bfsQueue[tail++] = i + 1; }
-                if (y > 0 && _fillSrc[i - dw] == 1 && _seedSrc[i - dw] == 0)
-                { _seedSrc[i - dw] = v; _bfsQueue[tail++] = i - dw; }
-                if (y < dh - 1 && _fillSrc[i + dw] == 1 && _seedSrc[i + dw] == 0)
-                { _seedSrc[i + dw] = v; _bfsQueue[tail++] = i + dw; }
-            }
-        }
-
-        /// <summary>
-        /// 把包围盒向外扩到四周都含干净像素（最多扩 3 轮，每轮 24 像素）。
-        /// 扩散迭代需要已知边界值，否则只能在覆盖值之间互相同化。
-        /// </summary>
-        private void GrowToCleanRing(int dw, int dh,
-            ref int minX, ref int minY, ref int maxX, ref int maxY)
-        {
-            for (int round = 0; round < 3; round++)
-            {
-                if (RingHasClean(dw, minX, minY, maxX, maxY)) return;
-
-                int nx0 = Math.Max(0, minX - 24), ny0 = Math.Max(0, minY - 24);
-                int nx1 = Math.Min(dw - 1, maxX + 24), ny1 = Math.Min(dh - 1, maxY + 24);
-                if (nx0 == minX && ny0 == minY && nx1 == maxX && ny1 == maxY) return;   // 已贴满全图
-                minX = nx0; minY = ny0; maxX = nx1; maxY = ny1;
-            }
-        }
-
-        /// <summary>包围盒外框（1 像素宽的环）上是否存在干净像素。</summary>
-        private bool RingHasClean(int dw, int minX, int minY, int maxX, int maxY)
-        {
-            for (int x = minX; x <= maxX; x++)
-            {
-                if (_fillSrc[minY * dw + x] == 0) return true;
-                if (_fillSrc[maxY * dw + x] == 0) return true;
-            }
-            for (int y = minY; y <= maxY; y++)
-            {
-                int row = y * dw;
-                if (_fillSrc[row + minX] == 0) return true;
-                if (_fillSrc[row + maxX] == 0) return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 平滑填充（smooth inpainting / Laplace diffusion）：把覆盖区视为未知，
-        /// 只用**紧邻覆盖区的干净边界**向外扩散求解拉普拉斯方程，直到填满覆盖区。
-        ///
-        /// 与另外两种做法的对比（用户报告"X 形"后的三次迭代）：
-        /// 1. BFS（最近干净邻居）：把覆盖区每像素填成最近邻居的颜色 → 玻璃下方的竖条纹被
-        ///    垂直拉伸进玻璃，形成沙漏/X 形。
-        /// 2. 全局大 σ 高斯：无拉伸条纹，但权重范围 7σ 覆盖整块区域，远处的高亮物体
-        ///    （发光的发光柱）亮度渗入玻璃中心。
-        /// 3. 拉普拉斯扩散：信息只从覆盖区**边界环**向内传播，每步取四邻域平均。
-        ///    结果是边界色的谐波延拓——平滑、无条纹、且完全不受覆盖区之外像素的影响。
-        ///
-        /// 实现：BFS 用最近边界色初始化，再在 **1/2 分辨率**网格上做 K 轮 Jacobi 迭代，
-        /// K 取到信息能从边界环到达覆盖区中心（网格上距离减半，故轮数约为区域半径的 1/4）。
-        /// 半分辨率把成本压到全分辨率的约 1/8，而 backdrop 随后还要过 blur(7px)，
-        /// 2×2 块感会被完全抹平。
-        /// </summary>
-        private void InpaintHarmonic(byte[] rgba, int dw, int dh, int minX, int minY, int maxX, int maxY)
-        {
-            int bw = maxX - minX + 1, bh = maxY - minY + 1;
-            if (bw <= 0 || bh <= 0) return;
-
-            // 在 **1/2 分辨率**的粗网格上扩散：距离减半 → 所需迭代轮数减半，网格面积减到 1/4，
-            // 总成本约为全分辨率的 1/8。写回时是 2×2 块，但 backdrop 随后还要过 blur(7px)
-            // （Real 模式）或被降采样放大（Fake 模式），块感会被完全抹平，肉眼不可分辨。
-            int cw = (bw + 1) / 2, ch = (bh + 1) / 2;
-            int n = cw * ch;
-            var cur = new float[n * 3];
-            bool[] covered = new bool[n];
-            float meanR = 0, meanG = 0, meanB = 0;   // 干净像素均值：给无种子的孤岛像素兜底
-            int cleanCount = 0;
-
-            // 1) 采样到粗网格：干净像素取原色（同时累计均值）。
-            for (int cy = 0; cy < ch; cy++)
-            {
-                int vy = Math.Min(dh - 1, minY + cy * 2);
-                int srcRow = vy * dw;
-                int dstRow = cy * cw;
-                for (int cx = 0; cx < cw; cx++)
-                {
-                    int vx = Math.Min(dw - 1, minX + cx * 2);
-                    int idx = srcRow + vx;
-                    int m = dstRow + cx, r = m * 3, s = idx * 4;
-                    if (_fillSrc[idx] == 1)
-                    {
-                        covered[m] = true;
-                        continue;
-                    }
-                    cur[r] = rgba[s]; cur[r + 1] = rgba[s + 1]; cur[r + 2] = rgba[s + 2];
-                    meanR += rgba[s]; meanG += rgba[s + 1]; meanB += rgba[s + 2]; cleanCount++;
-                }
-            }
-
-            // 2) 覆盖网格单元用**最近干净像素**的颜色初始化（_seedSrc 由 bbox 内 BFS 给出）。
-            //    这只是给扩散一个合理起点；最终颜色由下面的 Jacobi 迭代决定，
-            //    所以初始化里残留的方向性条纹会被迭代抹平（纯 BFS 结果才会留条纹 → X 形）。
-            for (int cy = 0; cy < ch; cy++)
-            {
-                int vy = Math.Min(dh - 1, minY + cy * 2);
-                int srcRow = vy * dw;
-                int dstRow = cy * cw;
-                for (int cx = 0; cx < cw; cx++)
-                {
-                    int vx = Math.Min(dw - 1, minX + cx * 2);
-                    int m = dstRow + cx;
-                    if (!covered[m]) continue;
-                    int seed = _seedSrc[srcRow + vx];
-                    int r = m * 3;
-                    if (seed > 0)
-                    {
-                        int s = (seed - 1) * 4;
-                        cur[r] = rgba[s]; cur[r + 1] = rgba[s + 1]; cur[r + 2] = rgba[s + 2];
-                    }
-                    else if (cleanCount > 0)
-                    {
-                        // 孤岛覆盖像素（四周无干净邻居）：先用干净均值兜底，扩散迭代会修正。
-                        cur[r] = meanR / cleanCount;
-                        cur[r + 1] = meanG / cleanCount;
-                        cur[r + 2] = meanB / cleanCount;
-                    }
-                }
-            }
-
-            // 3) Jacobi 迭代：覆盖单元 = 四邻域平均（信息从边界环向内平滑传播）。
-            // 轮数按覆盖区半径（网格单元数）取，保证中心也被边界信息到达；
-            // 再用「总运算量预算」封顶，避免 body 背景不透明导致 bbox 铺满整张时吃满整帧。
-            int radius = Math.Max(bw, bh) / 4;
-            int iters = Math.Min(Math.Max(10, radius), 40);
-            iters = Math.Min(iters, Math.Max(3, 2_000_000 / Math.Max(1, n)));
-            for (int it = 0; it < iters; it++)
-            {
-                int touched = 0;
-                for (int cy = 1; cy < ch - 1; cy++)
-                {
-                    int row = cy * cw;
-                    for (int cx = 1; cx < cw - 1; cx++)
-                    {
-                        int m = row + cx;
-                        if (!covered[m]) continue;
-                        int r = m * 3;
-                        int p = (m - 1) * 3, q = (m + 1) * 3, u = (m - cw) * 3, d = (m + cw) * 3;
-                        cur[r] = (cur[p] + cur[q] + cur[u] + cur[d]) * 0.25f;
-                        cur[r + 1] = (cur[p + 1] + cur[q + 1] + cur[u + 1] + cur[d + 1]) * 0.25f;
-                        cur[r + 2] = (cur[p + 2] + cur[q + 2] + cur[u + 2] + cur[d + 2]) * 0.25f;
-                        touched++;
-                    }
-                }
-                if (touched == 0) break;
-            }
-
-            // 4) 写回覆盖像素（backdrop 为不透明源，alpha 恒 255）。
-            for (int y = minY; y <= maxY; y++)
-            {
-                int srcRow = y * dw;
-                int cy = Math.Min(ch - 1, (y - minY) / 2) * cw;
-                for (int x = minX; x <= maxX; x++)
-                {
-                    int idx = srcRow + x;
-                    if (_fillSrc[idx] != 1) continue;
-                    int cx = Math.Min(cw - 1, (x - minX) / 2);
-                    int r = (cy + cx) * 3, s = idx * 4;
-                    rgba[s] = (byte)Math.Min(255, cur[r] + 0.5f);
-                    rgba[s + 1] = (byte)Math.Min(255, cur[r + 1] + 0.5f);
-                    rgba[s + 2] = (byte)Math.Min(255, cur[r + 2] + 0.5f);
-                    rgba[s + 3] = 255;
-                }
-            }
-        }
-
-        /// <summary>
-        /// 在一个 backdrop-filter 区域内构建蒙版：拷贝该区域对应的 UI 位图子矩形
-        /// （避免整张拷贝），再按降采样坐标判定 alpha，标记 <see cref="_fillSrc"/>。
-        /// </summary>
-        private void BuildMaskInRegion(IntPtr px, int W, int H, byte[] rgba, int dw, int dh,
-            SkiaCompositor.BackdropRegion region)
-        {
-            int rx0 = Mathf.Clamp(region.X, 0, W);
-            int ry0 = Mathf.Clamp(region.Y, 0, H);
-            int rx1 = Mathf.Clamp(region.X + region.Width, 0, W);
-            int ry1 = Mathf.Clamp(region.Y + region.Height, 0, H);
-            if (rx1 <= rx0 || ry1 <= ry0) return;
-
-            // 拷贝区域子矩形（UI 位图为 bottom-up：行 vy 存于缓冲行 H-1-vy）。
-            int rw = rx1 - rx0, rh = ry1 - ry0;
-            int subBytes = rw * rh * 4;
-            if (_uiRgba == null || _uiRgba.Length != subBytes)
-                _uiRgba = new byte[subBytes];
-            for (int y = 0; y < rh; y++)
-            {
-                int vy = ry0 + y;
-                int by = H - 1 - vy;
-                if (by < 0 || by >= H) continue;
-                Marshal.Copy(px + (by * W + rx0) * 4, _uiRgba, y * rw * 4, rw * 4);
-            }
-
-            // 区域在降采样缓冲里的范围（外扩 1 块，覆盖边缘取整误差）。
-            int ddx0 = Mathf.Max(0, rx0 * dw / W - 1);
-            int ddx1 = Mathf.Min(dw, ((rx1 - 1) * dw / W) + 2);
-            int ddy0 = Mathf.Max(0, ry0 * dh / H - 1);
-            int ddy1 = Mathf.Min(dh, ((ry1 - 1) * dh / H) + 2);
-
-            for (int dy = ddy0; dy < ddy1; dy++)
-            {
-                int sy = Mathf.Min(H - 1, dy * H / dh);
-                if (sy < ry0 || sy >= ry1) continue;
-
-                // UI 位图 bottom-up：视觉行 sy → 缓冲行 H-1-sy → 子矩形行 sy-ry0。
-                int subRow = (sy - ry0) * rw * 4;
-
-                for (int dx = ddx0; dx < ddx1; dx++)
-                {
-                    int sx = Mathf.Min(W - 1, dx * W / dw);
-                    if (sx < rx0 || sx >= rx1) continue;
-                    int sub = (sx - rx0) * 4;
-                    int i = dy * dw + dx;
-                    // 阈值 >100：剔除**不透明** UI（文本/卡片/玻璃合成的 backdrop 内容，alpha≈255）。
-                    // 玻璃区合成后 alpha≈255（backdrop 不透明），会被整块剔除——这正确：
-                    // 玻璃里的像素已是「上一帧的自己」，留着会自我反馈。剔除后用平滑填充补回真实背景。
-                    //
-                    // 只按 sy 这一行判定：_uiRgba 已按「视觉行 sy → 缓冲行 H-1-sy」拷贝，
-                    // 行序是确定的，无需再并入镜像行。并入镜像会把画面**另一处**的 UI 也算成覆盖，
-                    // 使蒙版远超玻璃实际范围，填充源取到无关区域（玻璃被填成纯黑/错色）。
-                    if (_uiRgba[subRow + sub + 3] > 100)
-                        _fillSrc[i] = 1;
-                }
-            }
-        }
-
-        /// <summary>
-        /// 降采样到 dw×dh：每 divisor×divisor 块取 1 像素（CPU 抽点）。
-        ///
-        /// 不用 <c>Texture2D.Resize</c> 做 GPU 缩放：该 API 在当前 Unity 版本是「重新初始化纹理」
-        /// （尺寸变对但像素清空），会造成黑背底。
-        ///
-        /// 优先 <c>GetRawTextureData</c>（RGBA32/RGB24 直接读字节，无颜色转换、无 Color32 分配，
-        /// 避免每帧 8.3MB 托管分配造成的 GC 压力）；其余格式回退 <c>GetPixels32</c>。
-        /// </summary>
-        private static void Downsample(Texture2D shot, int sw, int sh, int dw, int dh, int divisor, byte[] rgba)
-        {
-            if (shot.format == TextureFormat.RGBA32 || shot.format == TextureFormat.RGB24)
-            {
-                int bpp = shot.format == TextureFormat.RGBA32 ? 4 : 3;
-                var src = shot.GetRawTextureData();
-                for (int dy = 0; dy < dh; dy++)
-                {
-                    int sy = Mathf.Min(sh - 1, dy * divisor);
-                    for (int dx = 0; dx < dw; dx++)
-                    {
-                        int sx = Mathf.Min(sw - 1, dx * divisor);
-                        int s = (sy * sw + sx) * bpp;
-                        int o = (dy * dw + dx) * 4;
-                        rgba[o] = src[s]; rgba[o + 1] = src[s + 1];
-                        rgba[o + 2] = src[s + 2]; rgba[o + 3] = 255;
-                    }
-                }
-                return;
-            }
-
-            var c = shot.GetPixels32();
-            for (int dy = 0; dy < dh; dy++)
-            {
-                int sy = Mathf.Min(sh - 1, dy * divisor);
-                for (int dx = 0; dx < dw; dx++)
-                {
-                    int sx = Mathf.Min(sw - 1, dx * divisor);
-                    Color32 cc = c[sy * sw + sx];
-                    int o = (dy * dw + dx) * 4;
-                    rgba[o] = cc.r; rgba[o + 1] = cc.g; rgba[o + 2] = cc.b; rgba[o + 3] = 255;
-                }
+                Destroy(shot);
             }
         }
 
@@ -799,7 +437,6 @@ namespace CuRmlGUI.Presentation
 
             for (var k = KeyCode.A; k <= KeyCode.Z; k++) list.Add(k);
             for (var k = KeyCode.Alpha0; k <= KeyCode.Alpha9; k++) list.Add(k);
-
             return list.ToArray();
         }
 
@@ -810,6 +447,7 @@ namespace CuRmlGUI.Presentation
             _view?.Dispose();
             _view = null;
 
+            if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
             _backdropRgba = null;
         }
 

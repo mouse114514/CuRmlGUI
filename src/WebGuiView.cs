@@ -31,6 +31,12 @@ namespace CuRmlGUI
         // 因此脏状态由本类自行维护：输入、文档变更、backdrop 更新、动画计时器。
         private int _renderLinger;
 
+        // 动画驱动的重绘限速：连续动画（旋转/脉冲/波形）会让 wg_update_delay 恒为 0，
+        // 若每帧都全量重绘（Skia 合成 + 8MB 纹理上传），会明显拖低帧率。限到 ~30fps，
+        // 既保持动画流畅，又把重绘成本减半；backdrop 的 15fps 更新不受此限速影响。
+        private const float MinAnimRenderInterval = 1f / 30f;
+        private float _lastRenderTime = -1f;
+
         // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
 
@@ -66,13 +72,6 @@ namespace CuRmlGUI
 
         /// <summary>像素缓冲字节数（<c>Width * Height * 4</c>）。</summary>
         public int ByteSize => _compositor.ByteSize;
-
-        /// <summary>
-        /// 上一帧应用了 backdrop-filter 的视口区域（top-down）。
-        /// 供 backdrop 捕获方做区域受限的蒙版剔除（只在这些区域内剔除自己 UI）。
-        /// </summary>
-        internal IReadOnlyList<SkiaCompositor.BackdropRegion> BackdropRegions
-            => _compositor.BackdropRegions;
 
         public bool IsValid => !_disposed && _ctx != IntPtr.Zero;
 
@@ -241,17 +240,24 @@ namespace CuRmlGUI
             NativeMethods.wg_update(_ctx);
 
             if (_compositor.ConsumeBackdropDirty()) RequestRender();
-            // <= 0：动画/计时器（滑块箭头、输入光标闪烁、滚动箭头）进行中，需立即渲染。
-            if (NativeMethods.wg_update_delay(_ctx) <= 0.0) RequestRender();
 
-            if (_renderLinger <= 0) return false;
+            // 渲染判定：
+            //  - 输入/文档/backdrop 变更 → linger（立即渲染 + 传播 2 帧）；
+            //  - 纯连续动画 → 限速到 ~30fps，避免每帧全量重绘拖垮帧率。
+            bool render = _renderLinger > 0;
+            if (!render && NativeMethods.wg_update_delay(_ctx) <= 0.0
+                && UnityEngine.Time.unscaledTime - _lastRenderTime >= MinAnimRenderInterval)
+                render = true;
+
+            if (!render) return false;
 
             _compositor.BeginFrame();
             NativeMethods.wg_render(_ctx);     // 同步触发 DrawGeometry / CreateTexture / 图层回调
             _compositor.EndFrame();
 
             UploadTexture();
-            _renderLinger--;
+            if (_renderLinger > 0) _renderLinger--;
+            _lastRenderTime = UnityEngine.Time.unscaledTime;
             return true;
         }
 
