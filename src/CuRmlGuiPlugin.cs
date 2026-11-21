@@ -20,7 +20,7 @@ namespace CuRmlGUI
     {
         public const string Guid = "com.cu.curmlgui";
         public const string Name = "CuRmlGUI";
-        public const string Version = "0.1.0";
+        public const string Version = "1.1.0";
 
         internal static new ManualLogSource Logger;
 
