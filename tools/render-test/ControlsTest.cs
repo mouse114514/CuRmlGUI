@@ -95,11 +95,11 @@ namespace CuRmlGUI.RenderTest
                 if (!Differs(tr, trL, 8)) { Console.WriteLine("  [FAIL] 未填充轨道为半透明"); failures++; }
                 else Console.WriteLine($"  [PASS] 未填充轨道为半透明 (bg差异 {Diff(tr, trL)})");
 
-                // 7. 高光层次：勾选框选中顶部高光带亮度明显高于底部暗带（decorator 渐变生效）。
-                double cbTop = AvgLum(bmpD, 64, 11, 76, 15);
-                double cbBot = AvgLum(bmpD, 64, 25, 76, 29);
-                bool cbHi = cbTop > cbBot + 20;
-                Console.WriteLine($"  [{(cbHi ? "PASS" : "FAIL")}] 勾选框顶部高光 (top={cbTop:F0} > bottom={cbBot:F0}+20)");
+                // 7. 高光：勾选框选中顶部 1px 内描边亮线应明显亮于中部填充（box-shadow 边缘高光生效）。
+                double cbTop = AvgLum(bmpD, 64, 11, 76, 13);
+                double cbBot = AvgLum(bmpD, 64, 21, 76, 26);
+                bool cbHi = cbTop > cbBot + 8;
+                Console.WriteLine($"  [{(cbHi ? "PASS" : "FAIL")}] 勾选框顶部边缘高光 (top={cbTop:F0} > mid={cbBot:F0}+8)");
                 if (!cbHi) failures++;
 
                 // 8. 外阴影：勾选框/圆钮正下方阴影带应比远处背景暗（box-shadow 外阴影生效）。
@@ -277,40 +277,28 @@ input[type=range] slidertrack { height: 2px; margin-top: 8px; background: rgba(2
 input[type=range] sliderprogress { height: 2px; margin-top: 0px; background: #6ea8ff; border-radius: 1px; }
 input[type=range] sliderbar { width: 16px; height: 16px; margin-top: 1px; margin-left: -8px; margin-right: -8px; border-radius: 8px; background: #ffffff; }
 
-/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：白色系 + 高光 + 内/外阴影）—— */
+/* —— 演示页液态玻璃覆盖（与 LiquidGlassDemo.cs 一致：白玻璃 + 边缘高光 + 内/外阴影）—— */
 input[type=checkbox] {
-  width: 20px; height: 20px; background-color: rgba(255,255,255,0.05);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.14) 12%, rgba(255,255,255,0.00) 42%,
-      rgba(255,255,255,0.00) 86%, rgba(255,255,255,0.10) 100%);
-  border-width: 1px; border-color: rgba(255,255,255,0.40); border-radius: 6px;
-  box-shadow: inset 0 1px 1px rgba(255,255,255,0.16), 0 2px 4px rgba(0,0,0,0.40);
+  width: 20px; height: 20px; background-color: rgba(255,255,255,0.07);
+  border-width: 1px; border-color: rgba(255,255,255,0.28); border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 1px rgba(0,0,0,0.14), 0 2px 5px rgba(0,0,0,0.45);
 }
 input[type=checkbox]:checked {
-  background-color: rgba(255,255,255,0.18);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.22) 16%, rgba(255,255,255,0.04) 44%,
-      rgba(0,0,0,0.00) 80%, rgba(0,0,0,0.10) 100%);
-  border-color: rgba(255,255,255,0.72);
-  box-shadow: inset 0 1px 2px rgba(255,255,255,0.28), 0 2px 5px rgba(0,0,0,0.45);
+  background-color: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.55);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.60), inset 0 -1px 1px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.50);
 }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px; background-color: rgba(255,255,255,0.10);
-  decorator: linear-gradient(180deg, rgba(0,0,0,0.16) 0%, rgba(0,0,0,0.04) 50%, rgba(255,255,255,0.14) 100%);
-  border-radius: 2px; box-shadow: inset 0 1px 1px rgba(0,0,0,0.22);
+  border-radius: 2px; box-shadow: inset 0 1px 1px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.12);
 }
 input[type=range] sliderprogress {
-  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.30);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.16) 45%, rgba(0,0,0,0.00) 70%, rgba(0,0,0,0.08) 100%);
-  border-radius: 2px;
+  height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.28);
+  border-radius: 2px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
   border-radius: 9px; background-color: rgba(255,255,255,0.55);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.42) 46%, rgba(255,255,255,0.10) 100%);
-  box-shadow: inset 0 1px 1px rgba(255,255,255,0.55), 0 3px 7px rgba(0,0,0,0.45);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.75), inset 0 -2px 2px rgba(0,0,0,0.12), 0 3px 7px rgba(0,0,0,0.45);
 }
 input[type=range] sliderarrowdec, input[type=range] sliderarrowinc { display: none; }
 ";

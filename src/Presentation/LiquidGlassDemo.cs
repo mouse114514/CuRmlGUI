@@ -532,59 +532,45 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .cc-slider input { flex: 1; }
 
 /* ==== 控制中心：液态玻璃控件（与 .w-card 面板同源，仅演示页生效） ====
-   颜色全部沿用主面板的白色系 rgba(255,255,255,x)，不使用任何彩色。
-   高斯模糊由 GPU 玻璃层提供（卡片整块模糊）：控件在卡片内、半透明即透出模糊背景，
-   与 .w-card 面板同一机制（面板本身也不自绘 blur）。
-   控件自身用「顶部白色高光 decorator + 白边 + 内阴影 + 外阴影」做出玻璃厚度与浮起感。
-   注意：滑块子元素只加视觉属性（background/decorator/border/box-shadow），不加 display/position。 */
+   颜色沿用主面板白色系 rgba(255,255,255,x)，不使用彩色。
+   高斯模糊由 GPU 玻璃层提供（卡片整块模糊）：控件在卡片内半透明即透出模糊背景。
+   高光/阴影全部用 box-shadow 精做（不用整块渐变——那是老式塑料斜面）：
+     顶部 1px 内描边亮线 = 玻璃边缘反光；底部内暗 = 厚度；外阴影 = 浮起。
+   注意：滑块子元素只用视觉属性，不加 display/position。 */
 input[type=checkbox] {
   width: 20px; height: 20px;
-  background-color: rgba(255,255,255,0.05);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.14) 12%,
-      rgba(255,255,255,0.00) 42%,
-      rgba(255,255,255,0.00) 86%,
-      rgba(255,255,255,0.10) 100%);
+  background-color: rgba(255,255,255,0.07);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.40);
+  border-color: rgba(255,255,255,0.28);
   border-radius: 6px;
-  box-shadow: inset 0 1px 1px rgba(255,255,255,0.16), 0 2px 4px rgba(0,0,0,0.40);
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.55),
+      inset 0 -1px 1px rgba(0,0,0,0.14),
+      0 2px 5px rgba(0,0,0,0.45);
   vertical-align: -4px;
 }
-input[type=checkbox]:hover { border-color: rgba(255,255,255,0.65); }
+input[type=checkbox]:hover { border-color: rgba(255,255,255,0.55); }
 input[type=checkbox]:checked {
-  background-color: rgba(255,255,255,0.18);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.75) 0%,
-      rgba(255,255,255,0.22) 16%,
-      rgba(255,255,255,0.04) 44%,
-      rgba(0,0,0,0.00) 80%,
-      rgba(0,0,0,0.10) 100%);
-  border-color: rgba(255,255,255,0.72);
-  box-shadow: inset 0 1px 2px rgba(255,255,255,0.28), 0 2px 5px rgba(0,0,0,0.45);
+  background-color: rgba(255,255,255,0.16);
+  border-color: rgba(255,255,255,0.55);
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.60),
+      inset 0 -1px 1px rgba(0,0,0,0.16),
+      0 2px 6px rgba(0,0,0,0.50);
 }
 
 input[type=range] { height: 18px; vertical-align: -4px; }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px;
   background-color: rgba(255,255,255,0.10);
-  decorator: linear-gradient(180deg,
-      rgba(0,0,0,0.16) 0%,
-      rgba(0,0,0,0.04) 50%,
-      rgba(255,255,255,0.14) 100%);
   border-radius: 2px;
-  box-shadow: inset 0 1px 1px rgba(0,0,0,0.22);
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.12);
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px;
-  background-color: rgba(255,255,255,0.30);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.16) 45%,
-      rgba(0,0,0,0.00) 70%,
-      rgba(0,0,0,0.08) 100%);
+  background-color: rgba(255,255,255,0.28);
   border-radius: 2px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px;
@@ -592,11 +578,10 @@ input[type=range] sliderbar {
   margin-left: -9px; margin-right: -9px;
   border-radius: 9px;
   background-color: rgba(255,255,255,0.55);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.85) 0%,
-      rgba(255,255,255,0.42) 46%,
-      rgba(255,255,255,0.10) 100%);
-  box-shadow: inset 0 1px 1px rgba(255,255,255,0.55), 0 3px 7px rgba(0,0,0,0.45);
+  box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.75),
+      inset 0 -2px 2px rgba(0,0,0,0.12),
+      0 3px 7px rgba(0,0,0,0.45);
 }
 input[type=range] sliderbar:hover { background-color: rgba(255,255,255,0.68); }
 input[type=range] sliderbar:active { background-color: rgba(255,255,255,0.82); }
