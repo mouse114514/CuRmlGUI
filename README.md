@@ -27,9 +27,12 @@ iOS 风格「液态玻璃」演示页（配置段仍沿用旧的 `[Spike]` 名�
 - **按 RmlUi 官方后端语义实现渲染接口**：scissor、clip mask（圆角裁剪）、
   离屏图层、`filter`/`backdrop-filter`、`mask-image`、渐变 shader、变换矩阵，
   逐条对齐 `RmlUi_Renderer_GL3` 的语义（用 Skia 的等价能力实现）。
-- **真毛玻璃**：`backdrop-filter` 对注入的游戏画面做模糊，并按 `border-radius` 裁剪；
-  默认使用**伪模糊**（1/2 降采样 + 盒式加权平均 + 双线性放大，不调用高斯），
-  成本极低；可切换为 `Real`（Skia 高斯）。
+- **真毛玻璃（GPU，推荐默认档位）**：`view.EnableGpuGlass(...)` 一行开启。
+  圆角裁剪、真实模糊、边缘折射全部在 GPU 上完成 —— `alpha=0` 合帧后
+  `ScreenCapture` 抓「游戏画面但不含自己」→ 1/2→1/4→1/8 降采样 →
+  1/8 上**密集 8 tap 可分离盒式模糊**（相邻采样，无重影；等权归约，不会变暗）→
+  逐级放大 → 程序化圆角网格采样。零 CPU 读回、零自定义 shader。
+  也保留 `backdrop-filter` 的 CPU 路径作为备用（伪模糊 / Skia 高斯）。
 - **按需渲染**：无输入、无动画、无 backdrop 更新时不重绘、不上传纹理；
   `MaxRenderFps` 同时约束输入/hover 与动画的重绘频率。
 - **中文开箱即用**：随插件发行 Liberation Sans（Latin）与 Unifont CJK 子集回退字体。
@@ -47,9 +50,14 @@ view.LoadDocument(
 
 view.ElementEvent += (type, id) => Debug.Log($"event {type} / {id}");
 
+// 可选：GPU 液态玻璃（库推荐默认档位）
+view.EnableGpuGlass(new[] { "hello" });
+
 // 每帧（主线程）
-view.Update();                             // 有变化才重绘并上传纹理
-GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), view.Texture);
+view.Update();                             // 有变化才重绘并上传纹理（并驱动玻璃模糊）
+
+// 在 OnGUI 里呈现（含玻璃合成）
+void OnGUI() => view.PresentOnGui();
 ```
 
 输入转发、毛玻璃抓屏、自定义滤镜、输入拦截等见
@@ -73,7 +81,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build # 托管 + �
 ## 演示页与配置
 
 `LiquidGlassDemo`（`src/Presentation/LiquidGlassDemo.cs`）是可选的演示页：
-iOS 控制中心式两列玻璃卡片、渐变高光、真毛玻璃、圆角裁剪、表单控件。
+iOS 控制中心式两列玻璃卡片、渐变高光、GPU 液态玻璃、圆角裁剪、表单控件。
 配置位于 `BepInEx/config/com.cu.curmlgui.cfg` 的 `[Spike]` 段（历史名称）：
 
 | 键 | 默认 | 说明 |
@@ -82,23 +90,20 @@ iOS 控制中心式两列玻璃卡片、渐变高光、真毛玻璃、圆角裁�
 | `AutoShow` | `false` | 启动即显示（免按键，供自动化截图） |
 | `ToggleKey` | `F1` | 显隐按键 |
 | `DpiScale` | `1` | dp→px 比例 |
-| `Backdrop` | `false` | 抓屏注入 backdrop（毛玻璃模糊源） |
-| `BackdropBlur` | `Fake` | `Fake` 伪模糊（默认）/ `Real` Skia 高斯 |
-| `FakeBlurScale` | `2` | Fake 的抓屏降采样除数（盒式平均） |
-| `FakeBlurRadius` | `6` | Fake 在降采样分辨率上的盒式平滑半径 |
+| `Glass` | `true` | GPU 液态玻璃（推荐默认档位）；关闭后只剩文字/边框 |
 
 ## 性能
 
-实测（游戏内 1920×1080、演示页玻璃全开、伪模糊）：
+实测（游戏内 1920×1080、演示页玻璃全开）：
 
-| 指标 | 早期实现 | 当前 |
+| 指标 | 早期 CPU 玻璃 | 当前 GPU 玻璃 |
 | --- | --- | --- |
-| 游戏 FPS | ~10 | 50–80（随场景波动） |
-| overlay render（摊销） | 70–125 ms/帧 | 2–4 ms/帧 |
-| capture | 8–17 ms | 1–2 ms |
-| overlay 重绘 | 每帧 | 10–20 fps（与抓屏同频）+ 输入上限 50 fps |
+| 抓屏 | CPU 读回（8–17 ms，约 15fps） | GPU 拷贝（`CaptureScreenshotIntoRenderTexture`，无读回） |
+| 模糊 | CPU 盒式平滑（约 21 ms/次） | GPU 1/8 密集 8 tap（约 24 次小尺寸 blit/帧） |
+| 纹理上传 | 每帧 8 MB | 玻璃不经 CPU，无上传 |
+| 重绘 | 20 fps 上限 | 20 fps 上限（玻璃模糊每帧更新） |
 
-性能设计（区域快照、半分辨率滤镜、图层只清 scissor、surface 分桶等）见
+性能设计（区域快照、半分辨率滤镜、图层只清 scissor、surface 分桶、GPU 玻璃链）见
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#性能模型)。
 
 ## 许可

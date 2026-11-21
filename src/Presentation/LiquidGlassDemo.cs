@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.InteropServices;
 using BepInEx.Logging;
-using CuRmlGUI.Native;
-using CuRmlGUI.Render;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -15,7 +12,8 @@ namespace CuRmlGUI.Presentation
     ///
     /// 它同时是渲染管线的端到端验证：
     ///   1) 原生 RmlUi → Skia 合成 → Unity 纹理（RGBA8888，bottom-up）；
-    ///   2) backdrop-filter 真毛玻璃（抓屏 → 模糊 → 按 border-radius 裁剪合成）；
+    ///   2) GPU 液态玻璃（库推荐默认档位）：alpha=0 合帧 → GPU 抓屏 → 1/8 密集 8 tap 模糊
+    ///      → 程序化圆角网格 + 边缘折射，整体零 CPU 读回、零自定义 shader；
     ///   3) clip mask（圆角裁剪）、gradient shader（高光/渐变）、表单控件与输入。
     ///
     /// 快捷键切换显隐；坐标以屏幕左上角为原点。配置段沿用 "[Spike]" 以兼容旧配置。
@@ -31,18 +29,8 @@ namespace CuRmlGUI.Presentation
         private bool _autoShow;
         private bool _autoShowDone;
 
-        // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
-        private bool _backdropCapture;
-        // 抓屏节流：玻璃背景 15fps（CPU 读回，成本高；35% 预算档）。
-        private const float CaptureInterval = 1f / 15f;
-        private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
-        // 模糊实现方式：Fake=1/2 降采样 + 可分离盒式平滑（加权平均，无高斯）；Real=Skia 高斯。
-        private BackdropBlurMode _blurMode = BackdropBlurMode.Fake;
-        private int _fakeBlurScale = 2;      // Fake 模式降采样除数（默认 1/2）
-        private int _fakeBlurRadius = 6;     // Fake 模式盒式平滑半径（降采样后的像素）
-
-        // GPU 玻璃层（抓屏 + 多级 bilinear 模糊 + 圆角 Mask）。
-        private GpuGlassLayer _glass;
+        // GPU 液态玻璃（库推荐默认档位）：抓屏 → 1/8 密集 8 tap 模糊 → 圆角网格，全在 GPU 上。
+        private bool _glassEnabled = true;
 
         private WebGuiView _view;
         private bool _visible;
@@ -52,7 +40,6 @@ namespace CuRmlGUI.Presentation
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
 
         // backdrop 路径耗时统计（每 3 秒打一条日志，用于量化优化效果）。
-        private double _costAccumMs;
         private double _renderAccumMs;
         private int _costFrames;
         private int _renderFrames;
@@ -62,21 +49,14 @@ namespace CuRmlGUI.Presentation
         private static readonly KeyCode[] Keys = BuildKeyList();
 
         public void Init(KeyCode toggleKey, float dpiScale, ManualLogSource log,
-            bool autoShow = false, bool backdrop = false,
-            BackdropBlurMode blurMode = BackdropBlurMode.Fake, int fakeBlurScale = 2, int fakeBlurRadius = 6)
+            bool autoShow = false, bool glass = true)
         {
             _toggleKey = toggleKey;
             _dpiScale = dpiScale <= 0f ? 1f : dpiScale;
             _log = log;
             _autoShow = autoShow;
-            _backdropCapture = backdrop;
-            _blurMode = blurMode;
-            _fakeBlurScale = fakeBlurScale < 1 ? 1 : fakeBlurScale;
-            _fakeBlurRadius = fakeBlurRadius < 0 ? 0 : fakeBlurRadius;
+            _glassEnabled = glass;
         }
-
-        /// <summary>抓屏降采样除数：Real 固定 1/4（模糊源够清晰即可），Fake 用配置的大除数。</summary>
-        private int CaptureDivisor => _blurMode == BackdropBlurMode.Fake ? _fakeBlurScale : BackdropScale;
 
         private void Update()
         {
@@ -101,35 +81,21 @@ namespace CuRmlGUI.Presentation
                 EnsureSize();
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                if (_backdropCapture)
-                {
-                    ReadBackdrop();
-                    RequestBackdropCapture();
-                }
-                sw.Stop();
-                var sw2 = System.Diagnostics.Stopwatch.StartNew();
                 bool updated = _view.Update();
-                sw2.Stop();
+                sw.Stop();
                 if (updated) _renderFrames++;
 
-                if (_backdropCapture)
+                _renderAccumMs += sw.Elapsed.TotalMilliseconds;
+                _costFrames++;
+                if (Time.time >= _nextCostLog)
                 {
-                    _costAccumMs += sw.Elapsed.TotalMilliseconds;
-                    _renderAccumMs += sw2.Elapsed.TotalMilliseconds;
-                    _costFrames++;
-                    if (Time.time >= _nextCostLog)
-                    {
-                        _log?.LogInfo(string.Format(
-                            "[CuRmlGUI] backdrop: capture avg {0:F1} ms/frame + render {1:F2} ms/frame " +
-                            "({2} frames, {3} actually re-rendered) | {4}",
-                            _costAccumMs / _costFrames, _renderAccumMs / _costFrames,
-                            _costFrames, _renderFrames, _view.TakeRenderStats()));
-                        _costAccumMs = 0;
-                        _renderAccumMs = 0;
-                        _costFrames = 0;
-                        _renderFrames = 0;
-                        _nextCostLog = Time.time + 3f;
-                    }
+                    _log?.LogInfo(string.Format(
+                        "[CuRmlGUI] UI render avg {0:F2} ms/frame ({1} frames, {2} re-rendered; GPU glass 50fps) | {3}",
+                        _renderAccumMs / _costFrames, _costFrames, _renderFrames, _view.TakeRenderStats()));
+                    _renderAccumMs = 0;
+                    _costFrames = 0;
+                    _renderFrames = 0;
+                    _nextCostLog = Time.time + 3f;
                 }
 
                 ForwardMouse();
@@ -147,72 +113,26 @@ namespace CuRmlGUI.Presentation
             if (_failed || !_visible || _view == null)
                 return;
 
-            // Repaint 阶段：UGUI 画布（游戏世界 + 游戏 HUD）已经画进后备缓冲，而 IMGUI
-            // 还没画。此处把后备缓冲拷进 RT，得到一张**不含自己 UI** 的干净画面。
-            GrabBackdrop();
-
             var tex = _view.Texture;
             if (tex == null) return;
 
-            int prevDepth = GUI.depth;
-            try
-            {
-                GUI.depth = -1000; // 尽量绘制在最上层
-                GUI.DrawTexture(
-                    new Rect(0, 0, Screen.width, Screen.height),
-                    tex, ScaleMode.StretchToFill, true);
-            }
-            finally
-            {
-                GUI.depth = prevDepth;
+            // 库统一呈现：alpha=0 合帧 → GPU 抓屏 → 画玻璃网格 → 画 UI（含 GUI.depth）。
+            _view.PresentOnGui();
 
-                // 吞掉鼠标类 IMGUI 事件，避免游戏自己的 IMGUI（控制台等）也处理同一批点击。
-                // 我们自己的输入走 Update 里的 Input 轮询，不依赖 IMGUI 事件。
-                var ev = Event.current;
-                if (ev != null)
+            // 吞掉鼠标类 IMGUI 事件，避免游戏自己的 IMGUI（控制台等）也处理同一批点击。
+            // 我们自己的输入走 Update 里的 Input 轮询，不依赖 IMGUI 事件。
+            var ev = Event.current;
+            if (ev != null)
+            {
+                switch (ev.type)
                 {
-                    switch (ev.type)
-                    {
-                        case EventType.MouseDown:
-                        case EventType.MouseUp:
-                        case EventType.MouseDrag:
-                        case EventType.ScrollWheel:
-                            ev.Use();
-                            break;
-                    }
+                    case EventType.MouseDown:
+                    case EventType.MouseUp:
+                    case EventType.MouseDrag:
+                    case EventType.ScrollWheel:
+                        ev.Use();
+                        break;
                 }
-            }
-        }
-
-        // ------------------------------------------------------------------ GPU 抓屏对齐探针（临时诊断）
-
-        private RenderTexture _probeRt;
-
-        /// <summary>
-        /// 验证 ScreenCapture.CaptureScreenshotIntoRenderTexture 在 URP 下是否 1:1 对齐：
-        /// 把 GPU 抓屏结果缩略画在右上角。与游戏画面一致 = 可以直接用于 GPU 玻璃。
-        /// </summary>
-        private void DrawGpuCaptureProbe()
-        {
-            if (Event.current == null || Event.current.type != EventType.Repaint) return;
-            try
-            {
-                int w = Screen.width, h = Screen.height;
-                if (_probeRt == null || _probeRt.width != w || _probeRt.height != h)
-                {
-                    if (_probeRt != null) { _probeRt.Release(); Destroy(_probeRt); }
-                    _probeRt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32);
-                    _probeRt.Create();
-                }
-
-                ScreenCapture.CaptureScreenshotIntoRenderTexture(_probeRt);
-
-                // 右上角 320x180 预览（临时诊断用）。
-                GUI.DrawTexture(new Rect(w - 330, 10, 320, 180), _probeRt, ScaleMode.ScaleAndCrop, false);
-            }
-            catch (Exception e)
-            {
-                _log?.LogError("[CuRmlGUI] GPU capture probe failed: " + e);
             }
         }
 
@@ -221,13 +141,7 @@ namespace CuRmlGUI.Presentation
         private void SetVisible(bool visible)
         {
             _visible = visible;
-            if (_glass != null) _glass.Visible = visible;
-            if (!visible)
-            {
-                // 隐藏时丢弃未消费的抓屏，避免再次显示时套用旧帧。
-                if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
-                _grabRequested = false;
-            }
+            if (_view?.GpuGlass != null) _view.GpuGlass.Visible = visible;
 
             // 输入拦截层：只在可见时生效，避免游戏 UGUI 收到「穿透」点击。
             if (visible)
@@ -312,7 +226,6 @@ namespace CuRmlGUI.Presentation
             int h = Mathf.Max(1, Screen.height);
 
             _view = new WebGuiView(w, h, _dpiScale);
-            _view.BackdropBlurMode = _blurMode;
             _lastW = w;
             _lastH = h;
 
@@ -322,10 +235,15 @@ namespace CuRmlGUI.Presentation
             if (!_view.LoadDocument(PageRml, PageCss.Replace("__FAMILY__", _fontFamily)))
                 _log?.LogError("[CuRmlGUI] LiquidGlass document failed to load.");
 
-            // GPU 玻璃（endCameraRendering）在此游戏不可用：世界/HUD 全在 UGUI，
-            // 相机目标是空的。暂时保留代码，不启用。
-            // _glass = new GpuGlassLayer(); ...
+            // GPU 液态玻璃：库推荐的默认档位（圆角 + 真实模糊 + 边缘折射，零自定义 shader）。
+            if (_glassEnabled)
+                _view.EnableGpuGlass(GlassIds, _dpiScale).Visible = _visible;
         }
+
+        private static readonly string[] GlassIds =
+        {
+            "card-weather", "card-music", "card-cal", "card-battery", "card-cc",
+        };
 
         private void LoadFonts()
         {
@@ -440,265 +358,6 @@ namespace CuRmlGUI.Presentation
             }
         }
 
-        // ------------------------------------------------------------------ backdrop 捕获（真·毛玻璃）
-
-        // 游戏世界与 HUD 全部由 UGUI ScreenSpaceOverlay 画布绘制（相机只清屏）。
-        // 绘制顺序：相机 → UGUI 画布（游戏世界 + HUD）→ 【此刻】→ IMGUI（我们自己）。
-        //
-        // 在 OnGUI 的 Repaint 阶段（GUI.DrawTexture 之前）调用
-        // ScreenCapture.CaptureScreenshotAsTexture()：它读取的是**最终屏幕**，与真实画面
-        // 1:1 对齐；且此刻我们的 IMGUI 尚未绘制，所以画面里**从不包含自己**。
-        //
-        // 不能用 Graphics.Blit(null, rt)：URP 下它在 OnGUI 阶段读到的是中间渲染目标
-        // （缩放/错位），导致背景「放大/裁剪/错位」。ScreenCapture 读最终屏幕，坐标天然正确。
-        //
-        // 画面本身不含自己 UI → 无需「蒙版剔除 + 图像修补」，X 形变形从根上消失。
-        private byte[] _backdropRgba;
-        private byte[] _blurTmp;
-        private Texture2D _pendingShot;   // 已抓屏、待读回像素
-        private bool _grabRequested;       // 已排队，等 OnGUI 抓
-        private float _nextCapture;
-
-        /// <summary>OnGUI Repaint 阶段抓取最终屏幕，并在 GPU 上降采样后读回（避免整屏 8MB 同步读回）。</summary>
-        private void GrabBackdrop()
-        {
-            if (!_grabRequested) return;
-            if (Event.current == null || Event.current.type != EventType.Repaint) return;
-            _grabRequested = false;
-
-            Texture2D full = null;
-            RenderTexture rt = null;
-            var prevActive = RenderTexture.active;
-            try
-            {
-                if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
-
-                full = ScreenCapture.CaptureScreenshotAsTexture();
-                int dw = Mathf.Max(1, full.width / CaptureDivisor);
-                int dh = Mathf.Max(1, full.height / CaptureDivisor);
-
-                // 只把「已抓好的最终画面」blit 到小 RT —— 不是从相机目标抓，
-                // 因此没有 URP 下 Graphics.Blit(null, rt) 的偏移/缩放问题。
-                rt = RenderTexture.GetTemporary(dw, dh, 0, RenderTextureFormat.ARGB32,
-                    RenderTextureReadWrite.sRGB);
-                Graphics.Blit(full, rt);
-                RenderTexture.active = rt;
-
-                var small = new Texture2D(dw, dh, TextureFormat.RGBA32, false);
-                small.ReadPixels(new Rect(0, 0, dw, dh), 0, 0);
-                small.Apply(false, false);
-                _pendingShot = small;
-            }
-            catch (Exception e)
-            {
-                _log?.LogError("[CuRmlGUI] Backdrop grab failed: " + e);
-                _nextCapture = Time.unscaledTime + 1f;
-            }
-            finally
-            {
-                RenderTexture.active = prevActive;
-                if (rt != null) RenderTexture.ReleaseTemporary(rt);
-                if (full != null) Destroy(full);
-            }
-        }
-
-        /// <summary>按节流间隔排队一次抓取；实际截屏在 <see cref="GrabBackdrop"/> 里做。</summary>
-        private void RequestBackdropCapture()
-        {
-            if (_grabRequested || _pendingShot != null) return;
-            if (Time.unscaledTime < _nextCapture) return;
-            _nextCapture = Time.unscaledTime + CaptureInterval;
-            _grabRequested = true;
-        }
-
-        /// <summary>上一帧已截屏：读回像素、降采样、翻转为 top-down 后注入 view。</summary>
-        private void ReadBackdrop()
-        {
-            if (_pendingShot == null) return;
-            var shot = _pendingShot;
-            _pendingShot = null;
-            try
-            {
-                int sw = shot.width, sh = shot.height;
-                // GrabBackdrop 已在 GPU 上降采样到目标尺寸，这里不再做 CPU 降采样。
-                int dw = sw, dh = sh;
-
-                int n = dw * dh * 4;
-                if (_backdropRgba == null || _backdropRgba.Length != n)
-                    _backdropRgba = new byte[n];
-
-                // GetRawTextureData 是 NativeArray 视图；行序 bottom-up，这里只做翻转到 top-down。
-                var raw = shot.GetRawTextureData<byte>();
-                int bpp = raw.Length / (sw * sh);
-                if (bpp == 4)
-                {
-                    unsafe
-                    {
-                        byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
-                            .GetUnsafeReadOnlyPtr(raw);
-                        fixed (byte* dstBase = _backdropRgba)
-                        {
-                            int rowBytes = dw * 4;
-                            for (int y = 0; y < dh; y++)
-                            {
-                                Buffer.MemoryCopy(
-                                    src + y * rowBytes,
-                                    dstBase + (dh - 1 - y) * rowBytes,
-                                    rowBytes, rowBytes);
-                            }
-                        }
-                    }
-                }
-                else if (bpp == 3)
-                {
-                    unsafe
-                    {
-                        byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
-                            .GetUnsafeReadOnlyPtr(raw);
-                        fixed (byte* dstBase = _backdropRgba)
-                        {
-                            for (int y = 0; y < dh; y++)
-                            {
-                                byte* s = src + y * sw * 3;
-                                byte* d = dstBase + (dh - 1 - y) * dw * 4;
-                                for (int x = 0; x < dw; x++)
-                                {
-                                    d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
-                                    s += 3; d += 4;
-                                }
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // 兜底：非常见格式（压缩等）退回 GetPixels32，保证可用性。
-                    var px = shot.GetPixels32();
-                    for (int y = 0; y < dh; y++)
-                    {
-                        int srcRow = y * sw;
-                        int dstRow = (dh - 1 - y) * dw;
-                        for (int x = 0; x < dw; x++)
-                        {
-                            var c = px[srcRow + x];
-                            int o = (dstRow + x) * 4;
-                            _backdropRgba[o] = c.r;
-                            _backdropRgba[o + 1] = c.g;
-                            _backdropRgba[o + 2] = c.b;
-                            _backdropRgba[o + 3] = c.a;
-                        }
-                    }
-                }
-
-                if (_blurMode == BackdropBlurMode.Fake && _fakeBlurRadius > 0)
-                {
-                    // Fake 模式：在 1/2 分辨率上做可分离盒式平滑（滑动窗口加权平均），
-                    // 不调用任何高斯/卷积滤镜；成本 O(像素数)，与半径无关。
-                    BoxBlur(_backdropRgba, dw, dh, _fakeBlurRadius, ref _blurTmp);
-                }
-
-                // 目标区域铺满整个视口（源是降采样图，需拉伸）。
-                _view.SetBackdrop(_backdropRgba, dw, dh, 0, 0, Screen.width, Screen.height);
-            }
-            catch (Exception e)
-            {
-                _log?.LogError("[CuRmlGUI] Backdrop readback failed: " + e);
-                _nextCapture = Time.unscaledTime + 1f;
-            }
-            finally
-            {
-                Destroy(shot);
-            }
-        }
-
-        /// <summary>行翻转（bottom-up → top-down）。</summary>
-        private static void FlipRowsV(byte[] rgba, int w, int h)
-        {
-            int rowBytes = w * 4;
-            var row = new byte[rowBytes];
-            for (int y = 0; y < h / 2; y++)
-            {
-                int a = y * rowBytes;
-                int b = (h - 1 - y) * rowBytes;
-                Buffer.BlockCopy(rgba, a, row, 0, rowBytes);
-                Buffer.BlockCopy(rgba, b, rgba, a, rowBytes);
-                Buffer.BlockCopy(row, 0, rgba, b, rowBytes);
-            }
-        }
-
-        /// <summary>
-        /// 可分离盒式平滑：水平 + 垂直两遍滑动窗口，窗口内像素等权平均。
-        /// 与双线性放大同属「加权平均」，但采样范围覆盖整个窗口；不使用高斯/卷积。
-        /// 复杂度 O(w*h)，与半径无关。
-        /// </summary>
-        private static void BoxBlur(byte[] rgba, int w, int h, int radius, ref byte[] tmp)
-        {
-            if (radius <= 0 || w <= 1 || h <= 1) return;
-            int n = w * h * 4;
-            if (tmp == null || tmp.Length != n) tmp = new byte[n];
-
-            int win = radius * 2 + 1;
-            int inv = (1 << 16) / win;
-
-            // 水平：rgba → tmp
-            for (int y = 0; y < h; y++)
-            {
-                int row = y * w * 4;
-                int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-                for (int i = -radius; i <= radius; i++)
-                {
-                    int x = i < 0 ? 0 : (i >= w ? w - 1 : i);
-                    int o = row + x * 4;
-                    s0 += rgba[o]; s1 += rgba[o + 1]; s2 += rgba[o + 2]; s3 += rgba[o + 3];
-                }
-                for (int x = 0; x < w; x++)
-                {
-                    int o = row + x * 4;
-                    tmp[o] = (byte)((s0 * inv) >> 16);
-                    tmp[o + 1] = (byte)((s1 * inv) >> 16);
-                    tmp[o + 2] = (byte)((s2 * inv) >> 16);
-                    tmp[o + 3] = (byte)((s3 * inv) >> 16);
-
-                    int xa = x - radius; if (xa < 0) xa = 0;
-                    int xb = x + radius + 1; if (xb >= w) xb = w - 1;
-                    int oa = row + xa * 4, ob = row + xb * 4;
-                    s0 += rgba[ob] - rgba[oa];
-                    s1 += rgba[ob + 1] - rgba[oa + 1];
-                    s2 += rgba[ob + 2] - rgba[oa + 2];
-                    s3 += rgba[ob + 3] - rgba[oa + 3];
-                }
-            }
-
-            // 垂直：tmp → rgba
-            int stride = w * 4;
-            for (int x = 0; x < w; x++)
-            {
-                int col = x * 4;
-                int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-                for (int i = -radius; i <= radius; i++)
-                {
-                    int y = i < 0 ? 0 : (i >= h ? h - 1 : i);
-                    int o = y * stride + col;
-                    s0 += tmp[o]; s1 += tmp[o + 1]; s2 += tmp[o + 2]; s3 += tmp[o + 3];
-                }
-                for (int y = 0; y < h; y++)
-                {
-                    int o = y * stride + col;
-                    rgba[o] = (byte)((s0 * inv) >> 16);
-                    rgba[o + 1] = (byte)((s1 * inv) >> 16);
-                    rgba[o + 2] = (byte)((s2 * inv) >> 16);
-                    rgba[o + 3] = (byte)((s3 * inv) >> 16);
-
-                    int ya = y - radius; if (ya < 0) ya = 0;
-                    int yb = y + radius + 1; if (yb >= h) yb = h - 1;
-                    int oa = ya * stride + col, ob = yb * stride + col;
-                    s0 += tmp[ob] - tmp[oa];
-                    s1 += tmp[ob + 1] - tmp[oa + 1];
-                    s2 += tmp[ob + 2] - tmp[oa + 2];
-                    s3 += tmp[ob + 3] - tmp[oa + 3];
-                }
-            }
-        }
         private static KeyCode[] BuildKeyList()
         {
             var list = new List<KeyCode>
@@ -719,15 +378,11 @@ namespace CuRmlGUI.Presentation
 
         private void OnDestroy()
         {
-            _glass?.Dispose();
-            _glass = null;
-
+            // 玻璃层由 WebGuiView 持有并随其 Dispose 释放。
             _view?.Dispose();
             _view = null;
 
             if (_inputBlocker != null) { Destroy(_inputBlocker); _inputBlocker = null; }
-            if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
-            _backdropRgba = null;
         }
 
         // ------------------------------------------------------------------ 演示页文档
@@ -818,7 +473,6 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
   border-width: 1px;
   border-color: rgba(255,255,255,0.45);
   border-radius: 30px;
-  backdrop-filter: blur(1px) saturate(180%);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }

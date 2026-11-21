@@ -62,13 +62,15 @@ public sealed class MyOverlay : MonoBehaviour
     private void OnGUI()
     {
         if (_view?.Texture == null) return;
-        GUI.depth = -1000;
-        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), _view.Texture);
+        // 库统一呈现（含 GPU 玻璃合成与 GUI.depth）；等价于原来的 GUI.DrawTexture。
+        _view.PresentOnGui();
     }
 
     private void OnDestroy() => _view?.Dispose();
 }
 ```
+
+> 需要液态玻璃时，加一行 `_view.EnableGpuGlass(new[] { "panel" });`（见 §7.1）。
 
 ## 3. 生命周期与线程
 
@@ -114,9 +116,46 @@ view.TextInputCodepoint(uint codePoint);
 - 重绘成本与内容复杂度相关；大面积玻璃时建议 20–30。
 - `view.TakeRenderStats()` 返回分项耗时（draw/composite/mask/layers），用于诊断。
 
-## 7. 毛玻璃（backdrop-filter）
+## 7. 液态玻璃与毛玻璃
 
-### 7.1 注入 backdrop
+### 7.1 GPU 液态玻璃（推荐默认档位）
+
+库内置的液态玻璃：圆角裁剪、真实模糊、边缘折射全部在 GPU 上完成，**不读回 CPU**，
+也不需要 `backdrop-filter` 或任何自定义 shader。
+
+```csharp
+var view = new WebGuiView(Screen.width, Screen.height);
+
+// 声明需要玻璃背景的元素 id（通常就是卡片）
+var glass = view.EnableGpuGlass(new[] { "card-weather", "card-music" });
+glass.CornerRadius     = 30;   // 圆角半径（屏幕像素）
+glass.BlurStepPixels   = 1f;   // 模糊采样间距（1/8 分辨率像素）；1 = 相邻采样、无重影
+glass.RefractionPixels = 5f;   // 边缘折射强度（屏幕像素）
+
+view.Update();                 // 每帧：自动对齐元素矩形 + 在 GPU 上模糊
+```
+
+```csharp
+// 呈现：必须在 OnGUI 里（替代直接 GUI.DrawTexture(view.Texture)）
+private void OnGUI() => view.PresentOnGui();
+```
+
+`PresentOnGui` 的顺序：`alpha=0` 画一次 UI 触发合帧 →
+`ScreenCapture.CaptureScreenshotIntoRenderTexture` 抓「游戏画面但不含我们 UI」→
+画玻璃网格 → 画 UI。因此玻璃永远不会被自己抓进去（无反馈）。
+
+模糊链（全 GPU）：全屏 → 1/2 → 1/4 → 1/8，在 1/8 上做**可分离密集 8 tap 盒式模糊**
+（采样点间距 1 个 1/8 像素，相邻采样不会产生重影），用两两 50% 平均的归约树**等权**合成
+（alpha 恒为 1，**不会整体变暗**，也不需要亮度补偿），再逐级双线性放大回全屏。
+
+注意：
+
+- 一个屏幕建议只让一个视图启用玻璃（每个实例占用数张全屏 RT）。
+- CSS 里卡片应保持**透明/极淡**背景，只画文字、边框与高光（玻璃由网格提供）。
+- 隐藏 UI 时设 `glass.Visible = false`，可跳过抓屏/模糊/绘制。
+- 该路径依赖 IMGUI 的 `OnGUI` 合帧行为；不用 IMGUI 呈现时请用 7.2 的 CPU 路径。
+
+### 7.2 注入 backdrop（CPU，备用）
 
 `backdrop-filter` 的输入是**你自己抓的游戏画面**；它只作为模糊源，**不会**进入最终纹理。
 
@@ -130,11 +169,10 @@ view.ClearBackdrop();
 
 - 用 `ScreenCapture.CaptureScreenshotAsTexture()` 在 **OnGUI 的 Repaint 阶段、
   自己 `GUI.DrawTexture` 之前**抓最终 framebuffer（与屏幕 1:1 对齐，且不含自己的 UI）。
-- **不要**用 `Graphics.Blit(null, rt)` / `CaptureScreenshotIntoRenderTexture`：
-  URP 下会读到中间渲染目标，导致背景错位/缩放。
+- 不要从相机目标抓：URP 下 UGUI（世界 + HUD）不在相机目标里，会得到黑屏或错位。
 - 节流：玻璃背景 10–20fps 足够；抓屏是同步读回，成本高于重绘。
 
-### 7.2 Fake / Real
+### 7.3 Fake / Real
 
 ```csharp
 view.BackdropBlurMode = BackdropBlurMode.Fake;   // 默认：不执行任何模糊
@@ -148,8 +186,7 @@ view.BackdropBlurMode = BackdropBlurMode.Real;   // Skia 高斯（重）
 2. 在 1/2 分辨率上做**可分离盒式平滑**（水平+垂直滑动窗口，半径可调，O(N)）；
 3. 交给 `SetBackdrop`，compositor 双线性放大到元素区域。
 
-参考实现：`src/Presentation/LiquidGlassDemo.cs` 的 `ReadBackdrop` / `BoxBlur`。
-关键参数：降采样除数 2，平滑半径 6（等效观感半径 ≈ 12px）。
+参考实现：库不再附带 CPU 抓屏示例；日常请直接用 7.1 的 GPU 路径（零 CPU 读回、成本更低）。
 
 > Real 模式的成本正比于元素面积：400×260≈2.6ms、800×520≈14.9ms、全屏≈81ms（CPU），
 > 大面积玻璃慎用。

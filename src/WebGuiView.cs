@@ -14,17 +14,22 @@ namespace CuRmlGUI
     ///   var view = new WebGuiView(1280, 720);   // 创建上下文 + 离屏位图
     ///   view.LoadFont(pathToTtf);               // 加载字体（含 CJK）
     ///   view.LoadDocument(rml, rcss);           // 载入文档
-    ///   每帧: view.Update();                    // 有变化才重绘并上传纹理
-    ///   呈现: Graphics.DrawTexture(...view.Texture...);
+    ///   view.EnableGpuGlass("card-a", "card-b");// 可选：GPU 液态玻璃（推荐）
+    ///   每帧: view.Update();                    // 有变化才重绘并上传纹理（并驱动玻璃模糊）
+    ///   呈现: view.PresentOnGui();              // 在 OnGUI 里画（含玻璃合成）
     ///
     /// 线程：所有方法必须在主线程调用（RmlUi 非线程安全，纹理上传也只能主线程）。
     /// </summary>
-    public sealed class WebGuiView : IDisposable
+    public sealed class WebGuiView : IDisposable, IGlassRectSource
     {
         private IntPtr _ctx;
         private readonly SkiaCompositor _compositor;
         private Texture2D _texture;
         private bool _disposed;
+
+        // GPU 液态玻璃层（推荐的默认玻璃档位）。null = 未启用。
+        private GpuGlassLayer _glass;
+        private float _glassDpiScale = 1f;
 
         // 按需渲染：还要在接下来多少帧重绘。
         // RmlUi 6.3 的 Context::Update() 无条件返回 true（不再报告脏状态），
@@ -353,6 +358,111 @@ select selectbox option:hover {
             _compositor.ClearBackdrop();
         }
 
+        // ------------------------------------------------------------------ GPU 液态玻璃（推荐档位）
+
+        /// <summary>当前 GPU 玻璃层；未启用时为 <c>null</c>。</summary>
+        public GpuGlassLayer GpuGlass => _glass;
+
+        /// <summary>是否已启用 GPU 玻璃。</summary>
+        public bool HasGpuGlass => _glass != null;
+
+        /// <summary>
+        /// 启用 GPU 液态玻璃（库推荐默认档位）：圆角裁剪、真实模糊、边缘折射，全部在 GPU 上完成，
+        /// 不读回 CPU、不需要 `backdrop-filter`。返回的层可继续调
+        /// <see cref="GpuGlassLayer.CornerRadius"/> / <see cref="GpuGlassLayer.BlurStepPixels"/> 等参数。
+        ///
+        /// <para>每帧由 <see cref="Update"/> 自动对齐并模糊；呈现请改用 <see cref="PresentOnGui"/>。
+        /// 一个屏幕建议只让一个视图启用（每个实例占用数张全屏 RT）。</para>
+        /// </summary>
+        /// <param name="elementIds">需要玻璃背景的元素 id（通常就是卡片）。</param>
+        /// <param name="dpiScale">元素矩形（逻辑像素）→ 屏幕像素的缩放；与构造函数的 dpiScale 保持一致。</param>
+        public GpuGlassLayer EnableGpuGlass(IEnumerable<string> elementIds, float dpiScale = 1f)
+        {
+            ThrowIfDisposed();
+
+            DisableGpuGlass();
+
+            var glass = new GpuGlassLayer();
+            glass.Attach(elementIds);
+            _glass = glass;
+            _glassDpiScale = dpiScale <= 0f ? 1f : dpiScale;
+            return glass;
+        }
+
+        /// <summary>关闭并释放 GPU 玻璃层（之后可重新 <see cref="EnableGpuGlass"/>）。</summary>
+        public void DisableGpuGlass()
+        {
+            if (_glass == null) return;
+            _glass.Dispose();
+            _glass = null;
+        }
+
+        /// <summary>每帧驱动玻璃层：对齐元素矩形 + 在 GPU 上模糊。</summary>
+        private void UpdateGpuGlass()
+        {
+            if (_glass == null) return;
+            try
+            {
+                _glass.UpdateLayout(this, _glassDpiScale);
+                _glass.Blur();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[CuRmlGUI] GPU glass update failed: " + e);
+                DisableGpuGlass();
+            }
+        }
+
+        /// <summary>
+        /// 在 <c>OnGUI</c> 里呈现（含 GPU 玻璃合成）。顺序：alpha=0 触发合帧 → 抓屏 → 画玻璃 → 画 UI。
+        /// </summary>
+        /// <param name="guiDepth">IMGUI 深度；默认尽可能靠上层。</param>
+        public void PresentOnGui(int guiDepth = -1000)
+        {
+            var tex = _texture;
+            if (tex == null) return;
+
+            var full = new Rect(0, 0, Screen.width, Screen.height);
+            bool repaint = Event.current != null && Event.current.type == EventType.Repaint;
+
+            if (repaint && _glass != null && _glass.Visible)
+            {
+                var c = GUI.color;
+                try
+                {
+                    // 以 alpha=0 画一次 UI：触发 GUI 合帧，使抓屏拿到「含游戏 UGUI、不含我们 UI」的画面。
+                    GUI.color = new Color(1f, 1f, 1f, 0f);
+                    GUI.DrawTexture(full, tex, ScaleMode.StretchToFill, true);
+                }
+                finally
+                {
+                    GUI.color = c;
+                }
+
+                try
+                {
+                    _glass.Capture();
+                    _glass.Draw();   // 抓屏之后画玻璃网格（位于 UI 纹理之下）
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("[CuRmlGUI] GPU glass present failed: " + e);
+                    DisableGpuGlass();
+                }
+            }
+
+            int prevDepth = GUI.depth;
+            try
+            {
+                GUI.depth = guiDepth;
+                GUI.DrawTexture(full, tex, ScaleMode.StretchToFill, true);
+            }
+            finally
+            {
+                GUI.depth = prevDepth;
+            }
+        }
+
         // ------------------------------------------------------------------ 帧
 
         /// <summary>
@@ -372,6 +482,9 @@ select selectbox option:hover {
 
             // 每帧调用 Update：RmlUi 内部仅在脏时做布局，开销很小。
             NativeMethods.wg_update(_ctx);
+
+            // 玻璃每帧都要更新：模糊源是实时游戏画面，元素矩形也会随布局变化。
+            UpdateGpuGlass();
 
             if (_compositor.ConsumeBackdropDirty()) RequestRender(1);   // backdrop 只影响玻璃，1 帧足够
 
@@ -460,6 +573,9 @@ select selectbox option:hover {
             rect = new Rect(x, y, w, h);
             return true;
         }
+
+        // 显式实现，避免污染公共 API：玻璃层只依赖接口。
+        bool IGlassRectSource.TryGetElementRect(string id, out Rect rect) => GetElementRect(id, out rect);
 
         public void MouseMove(float x, float y)
         {
@@ -779,6 +895,8 @@ select selectbox option:hover {
         {
             if (_disposed) return;
             _disposed = true;
+
+            DisableGpuGlass();
 
             if (_ctx != IntPtr.Zero)
             {
