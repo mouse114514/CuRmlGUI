@@ -14,20 +14,15 @@ environment rather than from preference, and they determine most of the design.
 
 1. **No JavaScript.** RmlUi has no script engine, so interaction is carried by C#
    event callbacks.
-2. **No dependency on CCL or the official C# bindings.** RmlUi ships only C++ GPU
-   backends (GL3, Vulkan, DX11/12, Metal). The single C# binding that exists,
-   `Chorizite/RmlUi.Net`, targets RmlUi 4.x and lacks filters, layers and clip
-   masks. The project therefore compiles RmlUi 6.3 (MIT) and adds a hand-written
-   pure C ABI shim.
-3. **Unity Mono and .NET Framework 4.7.2.** .NET 8 assets cannot be loaded.
+2. **Unity Mono and .NET Framework 4.7.2.** .NET 8 assets cannot be loaded.
    SkiaSharp is pinned to 1.68.3 because the 2.x net462 assets reference
    `System.Runtime.InteropServices.RuntimeInformation`, which pulls in the
    netstandard 1.x facade set that Unity's Mono does not provide and cannot bind.
-4. **Skia software rasteriser as the render backend.** RmlUi performs parsing and
+3. **Skia software rasteriser as the render backend.** RmlUi performs parsing and
    layout and emits abstract draw commands; `SkiaCompositor` rasterises and
    composites them into one RGBA8888 bitmap, which reaches IMGUI through a
    `Texture2D`.
-5. **Single thread.** RmlUi, Skia and texture uploads must all run on the Unity
+4. **Single thread.** RmlUi, Skia and texture uploads must all run on the Unity
    main thread.
 
 ## 2. Layering
@@ -192,7 +187,7 @@ touching the full viewport.
 5. **Size-bucketed surface pool.** Alternating sizes no longer cause repeated
    destruction and allocation.
 6. **Texture shader cache.** The glyph atlas reuses one `SKShader` per frame.
-7. **Redraw throttling.** `MaxRenderFps` (default 50) bounds redraws triggered by
+7. **Redraw throttling.** `MaxRenderFps` (default 20) bounds redraws triggered by
    input, hover and animation, and backdrop updates schedule a single frame.
 8. **GPU liquid glass.** Glass never reaches the CPU; see section 5.1.
 

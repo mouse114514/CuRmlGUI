@@ -12,6 +12,17 @@ The library does not execute JavaScript. RmlUi contains no script engine, and th
 public API exposes no DOM query language, so all behaviour remains in your mod's
 C# code.
 
+## Project status and AI disclosure
+
+This project is in early testing. Behaviour is unstable, features are incomplete and
+undiagnosed defects are likely. The API may change without notice, and the library is
+not suitable for production use.
+
+- **Documentation.** Every document in this repository, including both READMEs and
+  everything under `docs/`, was written by an AI assistant.
+- **Code.** Roughly one quarter of the source code was produced with AI assistance;
+  the remainder was written and reviewed by the maintainer.
+
 ## Features
 
 - **HTML/CSS semantics.** Elements, `position`, `margin` and `padding`,
@@ -99,7 +110,7 @@ public sealed class MyOverlay : MonoBehaviour
 | --- | --- | --- |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Mod developers | Referencing the library, input forwarding, glass, custom filters, hit testing, common mistakes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Maintainers and researchers | Layering, render-interface semantics, coordinate systems, performance model |
-| [docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md) | Researchers | CSS capabilities that RmlUi 6.3 does not provide, and the suggested order of work |
+| [docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md) | Researchers | CSS capabilities that RmlUi 6.3 does not provide |
 
 Chinese versions: [README.zh-CN.md](README.zh-CN.md),
 [docs/INTEGRATION.zh-CN.md](docs/INTEGRATION.zh-CN.md),
@@ -156,7 +167,7 @@ of `BepInEx/config/com.cu.curmlgui.cfg`.
 | `Enabled` | `false` | Loads the demo page |
 | `AutoShow` | `false` | Shows the page on startup without a key press |
 | `ToggleKey` | `F1` | Shows or hides the page |
-| `DpiScale` | `1` | dp-to-pixel ratio; use 1.5 or 2 on high-density displays |
+| `DpiScale` | `1` | dp-to-pixel ratio, which scales `dp` units only; `px` stays absolute |
 | `Glass` | `true` | Enables GPU liquid glass |
 
 ## Performance

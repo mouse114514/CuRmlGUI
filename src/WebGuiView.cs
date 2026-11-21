@@ -29,7 +29,6 @@ namespace CuRmlGUI
 
         // GPU 液态玻璃层（推荐的默认玻璃档位）。null = 未启用。
         private GpuGlassLayer _glass;
-        private float _glassDpiScale = 1f;
 
         // 按需渲染：还要在接下来多少帧重绘。
         // RmlUi 6.3 的 Context::Update() 无条件返回 true（不再报告脏状态），
@@ -44,7 +43,7 @@ namespace CuRmlGUI
         private float _lastRenderTime = -1f;
 
         /// <summary>
-        /// 连续动画/输入驱动的最大重绘帧率（fps）。默认 50。
+        /// 连续动画/输入驱动的最大重绘帧率（fps）。默认 20。
         /// 设为 0 或负值表示不限速（每帧重绘，CPU 占用更高）；正数则限制为对应帧率。
         /// 注意：它同时约束「输入/hover」触发的重绘（这些重绘每次成本 10~20ms，
         /// 不限制的话鼠标划过 UI 就会逼着每帧全量重绘，把游戏帧率拖下去）。
@@ -373,10 +372,12 @@ select selectbox option:hover {
         ///
         /// <para>每帧由 <see cref="Update"/> 自动对齐并模糊；呈现请改用 <see cref="PresentOnGui"/>。
         /// 一个屏幕建议只让一个视图启用（每个实例占用数张全屏 RT）。</para>
+        ///
+        /// <para>元素矩形由 RmlUi 以像素返回，无需额外缩放；视图像素与屏幕像素的差异
+        /// （视图尺寸不等于屏幕时）由库在每帧自动换算。</para>
         /// </summary>
         /// <param name="elementIds">需要玻璃背景的元素 id（通常就是卡片）。</param>
-        /// <param name="dpiScale">元素矩形（逻辑像素）→ 屏幕像素的缩放；与构造函数的 dpiScale 保持一致。</param>
-        public GpuGlassLayer EnableGpuGlass(IEnumerable<string> elementIds, float dpiScale = 1f)
+        public GpuGlassLayer EnableGpuGlass(IEnumerable<string> elementIds)
         {
             ThrowIfDisposed();
 
@@ -385,7 +386,6 @@ select selectbox option:hover {
             var glass = new GpuGlassLayer();
             glass.Attach(elementIds);
             _glass = glass;
-            _glassDpiScale = dpiScale <= 0f ? 1f : dpiScale;
             return glass;
         }
 
@@ -403,7 +403,10 @@ select selectbox option:hover {
             if (_glass == null) return;
             try
             {
-                _glass.UpdateLayout(this, _glassDpiScale);
+                // RmlUi 的元素盒已经是像素；只有当视图尺寸不等于屏幕尺寸时才需要换算。
+                float sx = (float)UnityEngine.Screen.width / Mathf.Max(1, Width);
+                float sy = (float)UnityEngine.Screen.height / Mathf.Max(1, Height);
+                _glass.UpdateLayout(this, sx, sy);
                 _glass.Blur();
             }
             catch (Exception e)

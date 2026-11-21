@@ -1,6 +1,6 @@
 # CuRmlGUI
 
-**English** | [简体中文](README.zh-CN.md)
+[English](README.md) | **简体中文**
 
 CuRmlGUI 是面向《Casualties: Unknown》模组的界面库。界面使用 RML/RCSS（RmlUi 实现的
 HTML/CSS 方言）描述，最终通过 IMGUI 呈现。其中，RmlUi 负责解析、样式计算、布局、事件与动画，
@@ -8,6 +8,15 @@ SkiaSharp 负责将绘制指令光栅化并合成为位图，再由一张 Unity 
 
 本库不执行 JavaScript。RmlUi 不含脚本引擎，公共接口也不提供 DOM 查询能力，
 因此所有行为均由模组的 C# 代码承担。
+
+## 项目状态与 AI 使用声明
+
+本项目处于早期测试阶段，行为不稳定，功能尚不完整，并且可能存在尚未定位的缺陷。
+接口可能随时变更，不建议用于生产环境。
+
+- **文档。** 本仓库的全部文档，包括两个 README 与 `docs/` 下的所有文件，
+  均由 AI 编写。
+- **代码。** 约四分之一的源代码在 AI 辅助下完成，其余部分由维护者编写与审查。
 
 ## 特性
 
@@ -89,7 +98,7 @@ public sealed class MyOverlay : MonoBehaviour
 | --- | --- | --- |
 | [docs/INTEGRATION.zh-CN.md](docs/INTEGRATION.zh-CN.md) | 模组开发者 | 引入方式、输入转发、玻璃、自定义滤镜、命中测试与常见问题 |
 | [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md) | 维护者与研究者 | 分层结构、渲染接口语义、坐标系与性能模型 |
-| [docs/MISSING-FEATURES.zh-CN.md](docs/MISSING-FEATURES.zh-CN.md) | 研究者 | RmlUi 6.3 尚未提供的 CSS 能力及建议的实施顺序 |
+| [docs/MISSING-FEATURES.zh-CN.md](docs/MISSING-FEATURES.zh-CN.md) | 研究者 | RmlUi 6.3 尚未提供的 CSS 能力 |
 
 英文版本：[README.md](README.md)、[docs/INTEGRATION.md](docs/INTEGRATION.md)、
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、[docs/MISSING-FEATURES.md](docs/MISSING-FEATURES.md)。
@@ -141,7 +150,7 @@ dotnet run --project tools\render-test -c Release
 | `Enabled` | `false` | 是否加载演示页 |
 | `AutoShow` | `false` | 启动后直接显示，无需按键 |
 | `ToggleKey` | `F1` | 显示或隐藏演示页的按键 |
-| `DpiScale` | `1` | dp 到像素的比例；高分屏可设为 1.5 或 2 |
+| `DpiScale` | `1` | dp 到像素的比例，仅影响 `dp` 单位；`px` 为绝对像素 |
 | `Glass` | `true` | 是否启用 GPU 液态玻璃 |
 
 ## 性能

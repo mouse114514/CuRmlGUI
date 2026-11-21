@@ -60,7 +60,8 @@ namespace CuRmlGUI.RenderTest
             bool runReflect = Array.IndexOf(args, "--reflect") >= 0;
             bool runGlass = Array.IndexOf(args, "--glass") >= 0;
 
-            string family = "Unifont";
+            // 默认字体路径是 segoeui.ttf，其族名为 "Segoe UI"；族名不匹配时 RmlUi 不绘制字形。
+            string family = "Segoe UI";
             string extraFont = @"..\font-probe\out\unifont-17.0.04.otf";
             foreach (var a in args)
             {
@@ -205,7 +206,6 @@ namespace CuRmlGUI.RenderTest
                 Check(bmp, "页面背景", 210, 40, 0x1E, 0x1E, 0x28);
                 Check(bmp, "面板背景", 210, 160, 0x2A, 0x2A, 0x3A);
                 CheckTextNotSolid(bmp, "文字字形非实心", 14, 12, 88, 38);
-                Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
             }
 
             // backdrop-filter（磨砂玻璃）全链路：独立上下文 + 注入 backdrop。
@@ -215,6 +215,8 @@ namespace CuRmlGUI.RenderTest
 
             // UV 映射诊断：渐变网格 backdrop，暴露 UV 错位/三角形化错误（X 形）。
             s_failures += BackdropTest.RunPatterns(flip);
+
+            Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
 
             NativeMethods.wg_context_destroy(s_ctx);
             s_compositor.Dispose();

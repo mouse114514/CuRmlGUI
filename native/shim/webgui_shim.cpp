@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementUtilities.h>
 
 #include "webgui_shim.h"
 
@@ -920,7 +921,7 @@ int wg_get_element_box(WG_Context* ctx, const char* id,
 {
     if (!ctx || !ctx->doc || !id) return 0;
     Element* el = ctx->doc->GetElementById(String(id));
-    if (!el || el->GetNumBoxes() <= 0) return 0;
+    if (!el || !el->IsVisible(true) || el->GetNumBoxes() <= 0) return 0;
 
     const Vector2f origin = el->GetAbsoluteOffset(BoxArea::Border);
     Vector2f min = origin, max = origin;
@@ -940,6 +941,19 @@ int wg_get_element_box(WG_Context* ctx, const char* id,
             max.x = p.x + s.x > max.x ? p.x + s.x : max.x;
             max.y = p.y + s.y > max.y ? p.y + s.y : max.y;
         }
+    }
+
+    // 与祖先的裁剪区域求交：滚动容器或被 overflow 裁剪的元素不应在可视区外留下玻璃。
+    Rectanglei clip;
+    if (ElementUtilities::GetClippingRegion(el, clip))
+    {
+        const float cx0 = (float)clip.Left(), cy0 = (float)clip.Top();
+        const float cx1 = (float)clip.Right(), cy1 = (float)clip.Bottom();
+        min.x = min.x > cx0 ? min.x : cx0;
+        min.y = min.y > cy0 ? min.y : cy0;
+        max.x = max.x < cx1 ? max.x : cx1;
+        max.y = max.y < cy1 ? max.y : cy1;
+        if (max.x <= min.x || max.y <= min.y) return 0;
     }
 
     if (out_x) *out_x = min.x;

@@ -34,13 +34,21 @@ namespace CuRmlGUI.Native
                 throw new FileNotFoundException("Native runtime not found: " + nativePath);
 
             // 让依赖解析也能找到插件目录内可能存在的其它原生依赖。
+            // 加载完成后立即恢复默认搜索顺序，避免影响进程内其他插件的 DLL 解析。
             SetDllDirectory(pluginDir);
+            try
+            {
+                // 先预加载 SkiaSharp 原生库：net472 下 [DllImport("libSkiaSharp")] 不会搜索插件目录，
+                // 用绝对路径预加载后，P/Invoke 按模块基名即可命中同一模块。
+                PreloadIfPresent(Path.Combine(pluginDir, "libSkiaSharp.dll"));
 
-            // 先预加载 SkiaSharp 原生库：net472 下 [DllImport("libSkiaSharp")] 不会搜索插件目录，
-            // 用绝对路径预加载后，P/Invoke 按模块基名即可命中同一模块。
-            PreloadIfPresent(Path.Combine(pluginDir, "libSkiaSharp.dll"));
+                _module = LoadLibrary(nativePath);
+            }
+            finally
+            {
+                SetDllDirectory(null);
+            }
 
-            _module = LoadLibrary(nativePath);
             if (_module == IntPtr.Zero)
             {
                 int err = Marshal.GetLastWin32Error();

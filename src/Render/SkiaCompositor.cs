@@ -295,6 +295,8 @@ namespace CuRmlGUI.Render
             // 遮罩只在一帧内有效；RmlUi 会在需要时用 Set/SetInverse 重新建立。
             _clipMaskEnabled = false;
             _clipMaskValid = false;
+            _clipMaskPath?.Dispose();
+            _clipMaskPath = null;
             _dirty = true;
         }
 
@@ -930,7 +932,8 @@ namespace CuRmlGUI.Render
 
         /// <summary>
         /// 决定滤镜链的计算分辨率：仅「大区域 + 模糊/阴影」降到 0.5（面积 /4）。
-        /// 伪模糊模式下模糊被跳过，但整块玻璃本来就是低分辨率，仍按 0.5 计算以省成本。
+        /// 伪模糊模式下 blur 会被跳过，此时不为它降采样 —— 否则半分辨率快照会在边界
+        /// 引入过渡，与「模糊完全由 backdrop 分辨率决定」的约定矛盾。
         /// 小元素保持全分辨率；含 mask 的链必须全图对齐，不降。
         /// </summary>
         private float FilterPreScale(IntPtr filters, int filterCount, bool skipBlur, int area)
@@ -941,8 +944,9 @@ namespace CuRmlGUI.Render
                 int h = ReadFilterHandle(filters, i);
                 if (!_filters.TryGetValue(h, out var e)) continue;
                 if (e.Kind == FilterKind.Mask) return 1f;
-                if (e.SubKind == FilterSubKind.Blur || e.SubKind == FilterSubKind.DropShadow)
-                    return 0.5f;
+                if (e.SubKind != FilterSubKind.Blur && e.SubKind != FilterSubKind.DropShadow) continue;
+                if (e.SubKind == FilterSubKind.Blur && skipBlur) continue;
+                return 0.5f;
             }
             return 1f;
         }
@@ -1715,6 +1719,8 @@ namespace CuRmlGUI.Render
 
             _clipMaskImage?.Dispose();
             _clipMaskImage = null;
+            _clipMaskPath?.Dispose();
+            _clipMaskPath = null;
             _clipMaskCanvas?.Dispose();
             _clipMaskCanvas = null;
             _clipMaskBitmap?.Dispose();

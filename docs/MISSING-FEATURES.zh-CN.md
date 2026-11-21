@@ -2,7 +2,7 @@
 
 **English** | [简体中文](MISSING-FEATURES.zh-CN.md)
 
-本文记录使用 CuRmlGUI 构建精细界面时，哪些 CSS 能力可用、哪些尚不可用。
+本文记录使用 CuRmlGUI 构建界面时，哪些 CSS 能力可用、哪些不可用。
 范围包括本仓库编译的 RmlUi 6.3、Skia 合成器与适配层。结论依据 RmlUi 源码
 （`StyleSheetSpecification`、`DecoratorGradient`、`PropertyParserDecorator`、
 `ElementStyle`）与 `SkiaCompositor.CompileFilter` 的实现。
@@ -49,52 +49,46 @@
 
 **控件外观。** 库为 checkbox、radio、range、select 与文本输入提供了默认样式。
 
-## 2. 缺口（按影响排序）
+## 2. 缺口
 
-### 2.1 `::before` 与 `::after` 伪元素 —— 不支持（影响高）
+### 2.1 `::before` 与 `::after` 伪元素
 
-RmlUi 不支持伪元素，因此高光罩、渐变压暗或其他装饰节点都必须用真实元素实现。
-可行做法是约定类名：在标记中显式加入定位的 `<div class="sheen">`，再按常规方式
-设置样式。在 RmlUi 内部实现伪元素属于较大改动。
+RmlUi 不支持伪元素。高光罩、渐变压暗以及其他装饰节点都必须在标记中用真实元素实现。
 
-### 2.2 `box-shadow: inset` —— 不支持（影响高）
+### 2.2 `box-shadow: inset`
 
 内阴影会被忽略，只有外阴影生效。玻璃面板的内缘高光只能用亮色 `border`
-配合叠加渐变来近似。在 `SkiaCompositor` 中支持内阴影工作量适中，收益较高。
+配合叠加渐变来近似。
 
-### 2.3 以 `background` 使用渐变 —— 不支持（影响高）
+### 2.3 以 `background` 使用渐变
 
 渐变只能通过 `decorator: linear-gradient(...)` 使用，不能作为背景图像，
-也无法与 `background-color` 或多层背景叠加。因此玻璃需要多个嵌套元素，
-才能同时组合半透明白底、顶部高光与边缘渐变。支持 `background-image` 渐变
-可以消除这些额外元素。
+也无法与 `background-color` 或多层背景叠加。因此，组合半透明白底、顶部高光
+与边缘渐变需要多个嵌套元素。
 
-### 2.4 `text-shadow` —— 不支持（影响中）
+### 2.4 `text-shadow`
 
-没有 `text-shadow`，`font-effect: glow(color)` 只能近似光晕。玻璃上的文字
-无法添加投影或描边，在复杂背景上的可读性因此受限。在 Skia 文本绘制路径中
-加入阴影即可解决。
+没有 `text-shadow`，`font-effect: glow(color)` 只能近似光晕。文字无法添加投影或描边，
+在复杂背景上的可读性因此受限。
 
-### 2.5 `clip-path` —— 不支持（影响中）
+### 2.5 `clip-path`
 
-裁剪目前限于圆角矩形，无法使用 `inset`、`circle`、`polygon` 等任意形状，
-药丸与胶囊形状只能依赖 `border-radius`。在合成器中支持基础 `clip-path`
-形状是可行的。
+裁剪目前限于圆角矩形，无法使用 `inset`、`circle`、`polygon` 等形状，
+药丸与胶囊形状只能依赖 `border-radius`。
 
-### 2.6 CSS grid —— 不支持（影响中）
+### 2.6 CSS grid
 
-只有 flex 布局可用。卡片网格需要 `flex-wrap` 或显式宽度。在 RmlUi 中支持
-grid 属于较大改动，优先级较低。
+只有 flex 布局可用。卡片网格需要 `flex-wrap` 或显式宽度。
 
-### 2.7 `position: sticky` —— 不支持（影响低）
+### 2.7 `position: sticky`
 
 吸顶标题只能用 `fixed` 或 `absolute` 近似。
 
-### 2.8 `aspect-ratio` —— 不支持（影响低）
+### 2.8 `aspect-ratio`
 
 正方形或固定比例的卡片需要显式指定高度。
 
-### 2.9 `outline` —— 不支持（影响低）
+### 2.9 `outline`
 
 焦点描边只能使用会影响布局的 `border`，或使用外阴影近似。
 
@@ -112,27 +106,11 @@ grid 属于较大改动，优先级较低。
 - `font-family` 被当作单一字体名，而不是浏览器的回退列表，多字体需要显式加载。
 - 按设计不提供 JavaScript 与 DOM 查询接口。
 
-## 4. 建议的实施顺序
+## 4. 液态玻璃现状
 
-1. `box-shadow: inset`，用于补齐玻璃面板的内缘。
-2. 以 `background-image` 使用渐变，并支持与 `background-color` 叠加。
-3. `clip-path` 的基础形状。
-4. `text-shadow`。
-5. 基于显式辅助元素的 `::before` 与 `::after` 约定方案。
-6. 其余项目（grid、sticky、aspect-ratio、outline）按需求推进。
+液态玻璃已实现，并且是推荐的默认档位。该管线在 GPU 上生成当前画面的模糊副本，
+用程序化圆角矩形网格裁剪，并通过偏移边框 UV 产生边缘折射。详见
+[ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md#51-gpu-液态玻璃管线)。
 
-## 5. 液态玻璃现状
-
-液态玻璃已实现，并且是推荐的默认档位。当前管线在 GPU 上完成整个流程：
-对当前画面做模糊、通过程序化网格实现圆角裁剪、并通过偏移边框 UV 产生边缘折射。
-详见 [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md#51-gpu-液态玻璃管线)。
-
-仍有两项可选改进：
-
-- **更精细的边缘光学。** 当前的折射按固定距离沿径向偏移 UV。
-  若使用方法图或基于距离的衰减，可以更准确地弯折边缘附近的背景。
-- **镜面高光。** SkiaSharp 1.68.3 提供了 `CreateDistantLitSpecular`、
-  `CreatePointLitSpecular` 与 `CreateDisplacementMapEffect`。若通过
-  `Factory::RegisterFilterInstancer` 注册自定义滤镜并扩展 `WG_FilterParams` ABI，
-  可以实现方向性高光或透镜效果。GPU 网格已经绘制了边缘高光，
-  因此这属于改进而非缺失的能力。
+边缘折射按固定距离沿径向偏移 UV，没有使用法线图、基于距离的衰减或镜面滤镜，
+因此边缘处的弯折是均匀的，而不是跟随表面曲率变化。

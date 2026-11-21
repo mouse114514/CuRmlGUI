@@ -26,7 +26,17 @@ namespace CuRmlGUI.Render
             public string Id;
             public Mesh Mesh;
             public Rect Rect;
+            public int ScreenW, ScreenH;
+            public int Radius;
+            public float Refraction;
             public bool Built;
+
+            public bool Matches(Rect r, int sw, int sh, int radius, float refraction)
+                => Built
+                   && Rect == r
+                   && ScreenW == sw && ScreenH == sh
+                   && Radius == radius
+                   && Mathf.Abs(Refraction - refraction) < 0.01f;
         }
 
         private const int TapCount = 8;
@@ -40,6 +50,7 @@ namespace CuRmlGUI.Render
         private RenderTexture _h8, _v8;
         private RenderTexture[] _taps8, _red4, _red2;
         private int _w, _h;
+        private bool _captured, _ready;
 
         /// <summary>圆角半径（屏幕像素）。</summary>
         public int CornerRadius { get; set; } = 30;
@@ -56,6 +67,9 @@ namespace CuRmlGUI.Render
         /// <summary>是否可见（不可见时跳过抓屏、模糊与绘制）。</summary>
         public bool Visible { get; set; } = true;
 
+        /// <summary>是否可用（shader 缺失时会被禁用）。</summary>
+        public bool IsAvailable => _material != null;
+
         // ------------------------------------------------------------------ 生命周期
 
         /// <summary>创建网格与材质，并登记需要玻璃背景的元素 id。</summary>
@@ -66,6 +80,14 @@ namespace CuRmlGUI.Render
             // 与 GUI.DrawTexture 使用同一套 UI shader（直通 alpha）；Sprites/Default 是预乘混合。
             var ui = Shader.Find("UI/Default");
             if (ui == null) ui = Shader.Find("Sprites/Default");
+            if (ui == null)
+            {
+                // 发布包可能裁掉了这两个内置 shader：优雅降级而不是让调用方在 Awake 里崩溃。
+                Debug.LogError("[CuRmlGUI] GPU glass disabled: neither 'UI/Default' nor " +
+                               "'Sprites/Default' is available (shader stripped?).");
+                return;
+            }
+
             _material = new Material(ui) { hideFlags = HideFlags.HideAndDontSave };
 
             // 模糊用的 blit 材质：同一个 shader，靠 _Color.a 控制「复制 / 50% 混合」。
@@ -105,23 +127,32 @@ namespace CuRmlGUI.Render
 
         // ------------------------------------------------------------------ 每帧
 
-        /// <summary>每帧把玻璃面板对齐到 UI 元素矩形（只在该元素矩形变化时重建网格）。</summary>
-        public void UpdateLayout(IGlassRectSource source, float dpiScale)
+        /// <summary>每帧把玻璃面板对齐到 UI 元素矩形（矩形或相关参数变化时才重建网格）。</summary>
+        /// <param name="source">元素矩形解析器。</param>
+        /// <param name="scaleX">视图像素 → 屏幕像素的横向比例。</param>
+        /// <param name="scaleY">视图像素 → 屏幕像素的纵向比例。</param>
+        public void UpdateLayout(IGlassRectSource source, float scaleX, float scaleY)
         {
-            if (!Visible || source == null) return;
-            if (dpiScale <= 0f) dpiScale = 1f;
+            if (!Visible || source == null || !IsAvailable) return;
+            if (scaleX <= 0f) scaleX = 1f;
+            if (scaleY <= 0f) scaleY = 1f;
+
+            int sw = Screen.width, sh = Screen.height;
 
             foreach (var p in _panels)
             {
                 if (!source.TryGetElementRect(p.Id, out Rect r)) continue;
 
-                var rect = new Rect(r.x * dpiScale, r.y * dpiScale,
-                    r.width * dpiScale, r.height * dpiScale);
+                var rect = new Rect(r.x * scaleX, r.y * scaleY, r.width * scaleX, r.height * scaleY);
                 if (rect.width <= 0f || rect.height <= 0f) continue;
-                if (p.Built && p.Rect == rect) continue;
+                if (p.Matches(rect, sw, sh, CornerRadius, RefractionPixels)) continue;
 
                 BuildRoundedMesh(p.Mesh, rect, CornerRadius, RefractionPixels);
                 p.Rect = rect;
+                p.ScreenW = sw;
+                p.ScreenH = sh;
+                p.Radius = CornerRadius;
+                p.Refraction = RefractionPixels;
                 p.Built = true;
             }
         }
@@ -135,12 +166,14 @@ namespace CuRmlGUI.Render
             if (!Visible) return;
             EnsureTargets();
             ScreenCapture.CaptureScreenshotIntoRenderTexture(_screen);
+            _captured = true;
         }
 
         /// <summary>在 Update 中调用（不要在 OnGUI 里）：GPU 降采样 + 密集 8 tap 可分离模糊 + 逐级上采样。</summary>
         public void Blur()
         {
-            if (!Visible || _blitMat == null) return;
+            // 还没有抓屏时模糊的是未初始化的 RT：跳过，等第一次 Capture 之后再做。
+            if (!Visible || _blitMat == null || !_captured) return;
             EnsureTargets();
 
             var prev = RenderTexture.active;
@@ -158,6 +191,7 @@ namespace CuRmlGUI.Render
                 Graphics.Blit(_v8, _quarter);
                 Graphics.Blit(_quarter, _half);
                 Graphics.Blit(_half, _glass);
+                _ready = true;
             }
             finally
             {
@@ -168,7 +202,8 @@ namespace CuRmlGUI.Render
         /// <summary>在 OnGUI 里、抓屏之后、UI 纹理之前调用：以像素坐标画圆角玻璃网格。</summary>
         public void Draw()
         {
-            if (!Visible || _material == null || _glass == null) return;
+            // 首次模糊完成之前 _glass 尚无有效内容，跳过以免显示一帧未初始化的 RT。
+            if (!Visible || !IsAvailable || !_ready || _glass == null) return;
 
             _material.SetTexture("_MainTex", _glass);
 
@@ -232,6 +267,8 @@ namespace CuRmlGUI.Render
             ReleaseTargets();
             _w = w;
             _h = h;
+            _captured = false;
+            _ready = false;
 
             int ew = Mathf.Max(1, w / 8);
             int eh = Mathf.Max(1, h / 8);

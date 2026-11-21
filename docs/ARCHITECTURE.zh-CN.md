@@ -1,6 +1,6 @@
 # CuRmlGUI 架构说明
 
-**English** | [简体中文](ARCHITECTURE.zh-CN.md)
+[English](ARCHITECTURE.md) | **简体中文**
 
 本文说明 CuRmlGUI 的分层、边界、渲染语义与设计取舍。接口用法见
 [INTEGRATION.zh-CN.md](INTEGRATION.zh-CN.md)。
@@ -11,18 +11,14 @@ CuRmlGUI 是面向《Casualties: Unknown》的 HTML/CSS 界面库，不属于游
 下列约束由宿主环境决定，而非设计偏好，并且主导了整体架构。
 
 1. **不执行 JavaScript。** RmlUi 不含脚本引擎，交互一律通过 C# 事件回调完成。
-2. **不依赖 CCL 与官方 C# 绑定。** RmlUi 只提供 C++ 的 GPU 后端（GL3、Vulkan、
-   DX11/12、Metal）；唯一的 C# 绑定 `Chorizite/RmlUi.Net` 停留在 RmlUi 4.x，
-   缺少滤镜、图层与裁剪遮罩。因此本项目重新编译 RmlUi 6.3（MIT），并自行编写
-   纯 C ABI 适配层。
-3. **Unity Mono 与 .NET Framework 4.7.2。** 无法加载 .NET 8 程序集。SkiaSharp
+2. **Unity Mono 与 .NET Framework 4.7.2。** 无法加载 .NET 8 程序集。SkiaSharp
    固定为 1.68.3，因为 2.x 的 net462 版本引用
    `System.Runtime.InteropServices.RuntimeInformation`，会引入 Unity Mono 既未提供、
    也无法重定向的 netstandard 1.x 外观程序集。
-4. **以 Skia 软件光栅化作为渲染后端。** RmlUi 只负责解析与布局，输出抽象绘制指令；
+3. **以 Skia 软件光栅化作为渲染后端。** RmlUi 只负责解析与布局，输出抽象绘制指令；
    `SkiaCompositor` 完成光栅化与合成，产出一张 RGBA8888 位图，经 `Texture2D`
    交给 IMGUI 呈现。
-5. **单线程。** RmlUi、Skia 与纹理上传都必须在 Unity 主线程执行。
+4. **单线程。** RmlUi、Skia 与纹理上传都必须在 Unity 主线程执行。
 
 ## 2. 分层结构
 
@@ -153,7 +149,7 @@ CPU 渲染的成本主要由像素面积决定，因此所有优化都围绕「�
 4. **按裁剪区域清图层。** 不再每次清空 8.7 MB 的完整表面。
 5. **按尺寸分桶的表面池。** 尺寸交替时不再反复销毁与分配。
 6. **纹理着色器缓存。** 字形图集每帧复用同一个 `SKShader`。
-7. **重绘节流。** `MaxRenderFps`（默认 50）限制由输入、悬停与动画触发的重绘；
+7. **重绘节流。** `MaxRenderFps`（默认 20）限制由输入、悬停与动画触发的重绘；
    背景更新只安排一帧。
 8. **GPU 液态玻璃。** 玻璃不经过 CPU，详见 5.1。
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using BepInEx;
 using BepInEx.Logging;
@@ -35,6 +36,27 @@ namespace CuRmlGuiSample
 
         // 输入转发用的上一帧鼠标位置（避免重复发 move）。
         private float _lastMx = float.NaN, _lastMy = float.NaN;
+
+        // 只轮询会用到的按键；逐个枚举 KeyCode 每帧会产生数百次无效查询。
+        private static readonly KeyCode[] TrackedKeys = BuildKeyList();
+
+        private static KeyCode[] BuildKeyList()
+        {
+            var list = new List<KeyCode>
+            {
+                KeyCode.Backspace, KeyCode.Tab, KeyCode.Return, KeyCode.KeypadEnter,
+                KeyCode.Escape, KeyCode.Delete, KeyCode.Insert, KeyCode.Space,
+                KeyCode.LeftArrow, KeyCode.RightArrow, KeyCode.UpArrow, KeyCode.DownArrow,
+                KeyCode.Home, KeyCode.End, KeyCode.PageUp, KeyCode.PageDown,
+                KeyCode.LeftShift, KeyCode.RightShift,
+                KeyCode.LeftControl, KeyCode.RightControl,
+                KeyCode.LeftAlt, KeyCode.RightAlt,
+            };
+
+            for (var k = KeyCode.A; k <= KeyCode.Z; k++) list.Add(k);
+            for (var k = KeyCode.Alpha0; k <= KeyCode.Alpha9; k++) list.Add(k);
+            return list.ToArray();
+        }
 
         private void Awake()
         {
@@ -105,14 +127,31 @@ namespace CuRmlGuiSample
                     if (Input.GetMouseButtonUp(b)) _view.MouseUp(x, y, b);
                 }
 
-                // 键盘 + 文本（UTF-16 代理对经码点提交）。
-                foreach (KeyCode k in Enum.GetValues(typeof(KeyCode)))
+                // 键盘 + 文本（只轮询实际需要的按键；代理对合并为一个码点后提交）。
+                int mods = KeyMap.CurrentModifiers();
+                for (int i = 0; i < TrackedKeys.Length; i++)
                 {
-                    if (Input.GetKeyDown(k)) _view.KeyDown(k, 0);
-                    if (Input.GetKeyUp(k)) _view.KeyUp(k, 0);
+                    KeyCode k = TrackedKeys[i];
+                    if (Input.GetKeyDown(k)) _view.KeyDown(k, mods);
+                    if (Input.GetKeyUp(k)) _view.KeyUp(k, mods);
                 }
-                foreach (char c in Input.inputString)
-                    _view.TextInputCodepoint(c);
+
+                string typed = Input.inputString;
+                for (int i = 0; i < typed.Length; i++)
+                {
+                    char c = typed[i];
+                    if (c == '\b' || c == '\n' || c == '\r' || c == 127) continue;
+
+                    if (char.IsHighSurrogate(c) && i + 1 < typed.Length && char.IsLowSurrogate(typed[i + 1]))
+                    {
+                        _view.TextInputCodepoint((uint)char.ConvertToUtf32(c, typed[i + 1]));
+                        i++;
+                        continue;
+                    }
+                    if (char.IsSurrogate(c)) continue;
+
+                    _view.TextInput(c);
+                }
 
                 // --- 推进一帧，有变化才重绘并上传纹理 ---
                 _view.Update();
@@ -127,20 +166,10 @@ namespace CuRmlGuiSample
         private void OnGUI()
         {
             if (_failed || _view == null) return;
-            var tex = _view.Texture;
-            if (tex == null) return;
+            if (_view.Texture == null) return;
 
-            int prev = GUI.depth;
-            try
-            {
-                GUI.depth = -1000;
-                GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height),
-                    tex, ScaleMode.StretchToFill, true);
-            }
-            finally
-            {
-                GUI.depth = prev;
-            }
+            // 库统一呈现：含 GPU 玻璃合成与 GUI.depth 处理。
+            _view.PresentOnGui();
         }
 
         private void OnDestroy()

@@ -90,7 +90,7 @@ namespace CuRmlGUI.Presentation
                 if (Time.time >= _nextCostLog)
                 {
                     _log?.LogInfo(string.Format(
-                        "[CuRmlGUI] UI render avg {0:F2} ms/frame ({1} frames, {2} re-rendered; GPU glass 50fps) | {3}",
+                        "[CuRmlGUI] UI render avg {0:F2} ms/frame ({1} frames, {2} re-rendered; GPU glass every frame) | {3}",
                         _renderAccumMs / _costFrames, _costFrames, _renderFrames, _view.TakeRenderStats()));
                     _renderAccumMs = 0;
                     _costFrames = 0;
@@ -237,7 +237,7 @@ namespace CuRmlGUI.Presentation
 
             // GPU 液态玻璃：库推荐的默认档位（圆角 + 真实模糊 + 边缘折射，零自定义 shader）。
             if (_glassEnabled)
-                _view.EnableGpuGlass(GlassIds, _dpiScale).Visible = _visible;
+                _view.EnableGpuGlass(GlassIds).Visible = _visible;
         }
 
         private static readonly string[] GlassIds =

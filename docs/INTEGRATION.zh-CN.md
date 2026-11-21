@@ -1,6 +1,6 @@
 # CuRmlGUI 接入指南
 
-**English** | [简体中文](INTEGRATION.zh-CN.md)
+[English](INTEGRATION.md) | **简体中文**
 
 本文面向使用 CuRmlGUI 的模组开发者。内部实现细节见
 [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)。
@@ -120,7 +120,7 @@ view.TextInputCodepoint(codePoint);
 ## 6. 按需渲染与帧率
 
 - 没有输入、动画或背景更新时，视图既不重绘也不上传纹理。
-- `MaxRenderFps`（默认 50）限制由输入、悬停与动画触发的重绘。设为 0 表示取消限制，
+- `MaxRenderFps`（默认 20）限制由输入、悬停与动画触发的重绘。设为 0 表示取消限制，
   不推荐使用。
 - 重绘成本随内容复杂度增长；大面积玻璃可见时，建议将上限设为 20–30。
 - `view.TakeRenderStats()` 返回各阶段耗时（`draw`、`composite`、`mask`、`layers`），

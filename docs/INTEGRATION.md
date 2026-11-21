@@ -129,7 +129,7 @@ input. Combine modifiers with `Event.current` or `Input.GetKey`.
 
 - When there is no input, animation or backdrop update, the view neither re-renders
   nor uploads a texture.
-- `MaxRenderFps` (default 50) bounds redraws triggered by input, hover and
+- `MaxRenderFps` (default 20) bounds redraws triggered by input, hover and
   animation. A value of 0 removes the limit and is not recommended.
 - Redraw cost grows with content complexity; 20–30 is a reasonable limit when large
   glass areas are visible.
