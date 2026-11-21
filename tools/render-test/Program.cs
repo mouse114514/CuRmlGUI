@@ -222,6 +222,9 @@ namespace CuRmlGUI.RenderTest
             // 浏览器 CSS 兼容层：text-shadow/outline/单渐变 background → RmlUi 等价写法。
             s_failures += CssCompatTest.Run(flip, font, family);
 
+            // 表单控件观感：库默认深色主题 + iOS 覆盖后，checkbox/range 的最终像素。
+            s_failures += ControlsTest.Run(flip, font, family);
+
             Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
 
             NativeMethods.wg_context_destroy(s_ctx);

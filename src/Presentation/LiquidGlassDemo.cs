@@ -531,6 +531,44 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .s-label { width: 44px; font-size: 13px; color: rgba(255,255,255,0.72); }
 .cc-slider input { flex: 1; }
 
+/* ==== 控制中心：iOS 风格控件外观（覆盖库默认深色主题，仅演示页生效） ====
+   勾选框：半透明白底 + 细白边，选中态填充 iOS 蓝。
+   滑块：细轨（半透明白）+ iOS 蓝进度 + 白色圆形钮。库默认是深蓝底/蓝边，在玻璃上显突兀。 */
+input[type=checkbox] {
+  width: 20px; height: 20px;
+  background: rgba(255,255,255,0.14);
+  border-width: 1px;
+  border-color: rgba(255,255,255,0.55);
+  border-radius: 6px;
+  vertical-align: -4px;
+}
+input[type=checkbox]:hover { border-color: rgba(255,255,255,0.85); }
+input[type=checkbox]:checked {
+  background: #0A84FF;
+  border-color: #0A84FF;
+}
+
+input[type=range] { height: 18px; vertical-align: -4px; }
+input[type=range] slidertrack {
+  height: 4px; margin-top: 7px;
+  background: rgba(255,255,255,0.22);
+  border-radius: 2px;
+}
+input[type=range] sliderprogress {
+  height: 4px; margin-top: 0px;
+  background: #0A84FF;
+  border-radius: 2px;
+}
+input[type=range] sliderbar {
+  width: 18px; height: 18px;
+  margin-top: 0px;
+  margin-left: -9px; margin-right: -9px;
+  border-radius: 9px;
+  background: #ffffff;
+}
+input[type=range] sliderbar:hover { background: #eef2ff; }
+input[type=range] sliderbar:active { background: #0A84FF; }
+
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
 .compat { width: 620px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }
 .cp-title { font-size: 15px; font-weight: bold; text-shadow: 0px 2px 4px rgba(0, 0, 0, 0.55); }
