@@ -620,9 +620,9 @@ input[type=range] sliderbar:active {
   flex: 1; height: 44px; border-radius: 12px;
   text-align: center; line-height: 44px; font-size: 12px; color: #ffffff;
 }
-.cp-shadow  { background-color: rgba(255,255,255,0.10); text-shadow: 2px 2px 0px #ff5a5a; }
-.cp-outline { background-color: rgba(255,255,255,0.10); outline: 2px solid #34C759; }
-.cp-gradient { background: linear-gradient(135deg, #ff7ab8, #7b61ff 55%, #4facfe); }
+.cp-shadow  { background-color: rgba(255,255,255,0.10); text-shadow: 1px 1px 2px rgba(0,0,0,0.45); }
+.cp-outline { background-color: rgba(255,255,255,0.10); outline: 2px solid rgba(10,132,255,0.55); }
+.cp-gradient { background: linear-gradient(135deg, rgba(140,180,255,0.40), rgba(200,225,255,0.12) 55%, rgba(140,200,255,0.28)); }
 .cp-outline, .cp-gradient { margin-left: 12px; }
 ";
     }
