@@ -531,58 +531,35 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .s-label { width: 44px; font-size: 13px; color: rgba(255,255,255,0.72); }
 .cc-slider input { flex: 1; }
 
-/* ==== 控制中心：iOS 液态玻璃风格控件外观（覆盖库默认深色主题，仅演示页生效） ====
-   复用 .w-card 玻璃语言：半透明白底 + 顶部白色高光渐变 + 白边 + 底部微光，
-   让控件与玻璃卡同源，而非死气沉沉的纯色平涂。
-   勾选框：玻璃底 / 玻璃蓝（选中带高光与暗部）。
-   滑块：细轨凹槽 + iOS 蓝玻璃进度 + 白色玻璃球圆钮。
-   注意：滑块子元素只加纯视觉属性（background/decorator/box-shadow），
-   不加 display/position，避免命中盒错位拖不动。 */
+/* ==== 控制中心：iOS 扁平半透明玻璃控件（覆盖库默认深色主题，仅演示页生效） ====
+   与其他面板控件（.w-card）同源：半透明填充，透出 GPU 磨砂背景，融入玻璃卡；
+   不做不透明实心渐变/球体高光——那是廉价拟物感来源。
+   勾选框：半透明白底 + 细白边，选中为半透明 iOS 蓝。
+   滑块：半透明细轨 + 半透明 iOS 蓝进度 + 半透明白圆钮。
+   注意：滑块子元素只加纯视觉属性（background/border），不加 display/position。 */
 input[type=checkbox] {
   width: 20px; height: 20px;
-  background-color: rgba(255,255,255,0.10);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.75) 0%,
-      rgba(255,255,255,0.28) 20%,
-      rgba(255,255,255,0.04) 45%,
-      rgba(255,255,255,0.00) 80%,
-      rgba(255,255,255,0.16) 100%);
+  background-color: rgba(255,255,255,0.12);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.50);
+  border-color: rgba(255,255,255,0.35);
   border-radius: 6px;
   vertical-align: -4px;
 }
-input[type=checkbox]:hover { border-color: rgba(255,255,255,0.85); }
+input[type=checkbox]:hover { border-color: rgba(255,255,255,0.60); }
 input[type=checkbox]:checked {
-  background-color: #0A84FF;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.85) 0%,
-      rgba(255,255,255,0.30) 22%,
-      rgba(255,255,255,0.05) 45%,
-      rgba(0,0,0,0.00) 62%,
-      rgba(0,0,0,0.00) 82%,
-      rgba(0,0,0,0.24) 100%);
-  border-color: rgba(255,255,255,0.85);
+  background-color: rgba(10,132,255,0.55);
+  border-color: rgba(255,255,255,0.60);
 }
 
 input[type=range] { height: 18px; vertical-align: -4px; }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px;
-  background-color: rgba(255,255,255,0.18);
-  decorator: linear-gradient(180deg,
-      rgba(0,0,0,0.28) 0%,
-      rgba(0,0,0,0.08) 45%,
-      rgba(255,255,255,0.15) 100%);
+  background-color: rgba(255,255,255,0.20);
   border-radius: 2px;
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px;
-  background-color: #0A84FF;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.12) 40%,
-      rgba(0,0,0,0.00) 62%,
-      rgba(0,0,0,0.22) 100%);
+  background-color: rgba(10,132,255,0.55);
   border-radius: 2px;
 }
 input[type=range] sliderbar {
@@ -590,21 +567,10 @@ input[type=range] sliderbar {
   margin-top: 0px;
   margin-left: -9px; margin-right: -9px;
   border-radius: 9px;
-  background-color: #ffffff;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,1.0) 0%,
-      rgba(255,255,255,0.75) 42%,
-      rgba(214,224,248,0.55) 100%);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  background-color: rgba(255,255,255,0.65);
 }
-input[type=range] sliderbar:hover { background-color: #f2f6ff; }
-input[type=range] sliderbar:active {
-  background-color: #0A84FF;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.10) 40%,
-      rgba(0,0,0,0.10) 100%);
-}
+input[type=range] sliderbar:hover { background-color: rgba(255,255,255,0.80); }
+input[type=range] sliderbar:active { background-color: rgba(10,132,255,0.55); }
 
 /* ==== CSS 兼容层演示：以下用浏览器写法，由 CssCompat 重写为 RmlUi 等价属性 ==== */
 .compat { width: 620px; margin: 8px; padding: 16px 20px; display: flex; flex-direction: column; }

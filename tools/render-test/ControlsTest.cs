@@ -8,11 +8,10 @@ using SkiaSharp;
 namespace CuRmlGUI.RenderTest
 {
     /// <summary>
-    /// 验证表单控件（checkbox / range）在「库默认深色主题 + iOS 覆盖」下的最终观感，
-    /// 覆盖演示页控制中心的写法。逐像素断言：
-    ///   - 选中勾选框填充 iOS 蓝（#0A84FF），证明覆盖确实压过了库默认的深蓝底；
-    ///   - 未选中勾选框为半透明白底（而非库默认深蓝）；
-    ///   - 滑块进度为 iOS 蓝、圆钮为纯白、未填充轨道为半透明白。
+    /// 验证表单控件（checkbox / range）在「库默认深色主题 + 演示页 iOS 覆盖」下的最终观感。
+    /// 关键性质是「半透明玻璃」：控件应透出底层背景（与其他面板控件同源），而非不透明实心
+    /// 渐变/球体高光（廉价拟物感来源）。因此用两种不同背景色各渲染一次，断言控件区域像素
+    /// 随背景变化（半透明证明），且色相正确（选中蓝 / 圆钮白亮 / 进度蓝 / 轨道偏亮）。
     /// </summary>
     internal static class ControlsTest
     {
@@ -45,49 +44,65 @@ namespace CuRmlGUI.RenderTest
             Console.WriteLine($"\n=== ControlsTest (flip={flip}) ===");
 
             string css = Css.Replace("__FAMILY__", family ?? string.Empty);
-            using (var bmp = RenderCss(Rml, css, fontPath))
+            // 两种背景：深玻璃 vs 浅玻璃。半透明控件应透出背景（像素随之变化）→ 证明透明。
+            using (var bmpD = RenderCss(Rml, css.Replace("__BG__", "#26314d"), fontPath))
+            using (var bmpL = RenderCss(Rml, css.Replace("__BG__", "#7a8bb8"), fontPath))
             {
-                // 选中勾选框：#checked 在 (60,10) 20x20，中心应填充 iOS 蓝。
-                failures += CheckRegionColor(bmp, "选中勾选框为 iOS 蓝", 62, 12, 78, 28,
-                    c => c.Blue > 200 && c.Green >= 100 && c.Green <= 170 && c.Red < 70);
+                // 1. 选中勾选框为 iOS 蓝（蓝色调）。
+                var cb = AvgColor(bmpD, 64, 14, 76, 26);
+                bool cbBlue = cb.B > cb.R + 60 && cb.B > cb.G + 40;
+                Console.WriteLine($"  [{(cbBlue ? "PASS" : "FAIL")}] 选中勾选框为 iOS 蓝 ({cb})");
+                if (!cbBlue) failures++;
 
-                // 未选中勾选框：#unchecked 在 (10,10) 20x20，中心应为半透明白（灰），且非蓝色。
-                failures += CheckRegionColor(bmp, "未选中勾选框为半透明白", 12, 12, 28, 28,
-                    c => c.Red >= 20 && c.Red <= 80 && Math.Abs(c.Red - c.Green) < 12 && c.Blue < 80);
+                // 2. 选中勾选框半透明（两背景下颜色不同 = 背景透出）。
+                var cbL = AvgColor(bmpL, 64, 14, 76, 26);
+                if (!Differs(cb, cbL, 8)) { Console.WriteLine("  [FAIL] 选中勾选框为半透明 (背景无透出)"); failures++; }
+                else Console.WriteLine($"  [PASS] 选中勾选框为半透明 (bg差异 {Diff(cb, cbL)})");
 
-                // 滑块进度（左段）为 iOS 蓝：#range 在 (10,60)，轨道实测 x≈12..267，中心 y≈69。
-                failures += CheckRegionColor(bmp, "滑块进度为 iOS 蓝", 30, 66, 200, 72,
-                    c => c.Blue > 200 && c.Green >= 100 && c.Green <= 170 && c.Red < 70);
+                // 3. 未选中勾选框半透明。
+                var uc = AvgColor(bmpD, 14, 14, 26, 26);
+                var ucL = AvgColor(bmpL, 14, 14, 26, 26);
+                if (!Differs(uc, ucL, 8)) { Console.WriteLine("  [FAIL] 未选中勾选框为半透明"); failures++; }
+                else Console.WriteLine($"  [PASS] 未选中勾选框为半透明 (bg差异 {Diff(uc, ucL)})");
 
-                // 滑块圆钮（78% 处）为纯白：实测圆钮 x≈204..219（中心≈212），y≈60..78。
-                failures += CheckRegionColor(bmp, "滑块圆钮为纯白", 200, 63, 224, 75,
-                    c => c.Red > 200 && c.Green > 200 && c.Blue > 200);
+                // 4. 滑块进度为 iOS 蓝（蓝色调）。
+                var pr = AvgColor(bmpD, 40, 66, 180, 72);
+                bool prBlue = pr.B > pr.R + 60 && pr.B > pr.G + 40;
+                Console.WriteLine($"  [{(prBlue ? "PASS" : "FAIL")}] 滑块进度为 iOS 蓝 ({pr})");
+                if (!prBlue) failures++;
 
-                // 未填充轨道（右侧）为半透明白：实测灰色轨道 x≈220..267，黑底上 rgba(255,255,255,0.22)≈#383838。
-                failures += CheckRegionColor(bmp, "未填充轨道为半透明白", 225, 67, 264, 71,
-                    c => c.Red >= 30 && c.Red <= 100 && Math.Abs(c.Red - c.Green) < 12 && c.Blue < 90);
+                // 5. 滑块进度半透明。
+                var prL = AvgColor(bmpL, 40, 66, 180, 72);
+                if (!Differs(pr, prL, 8)) { Console.WriteLine("  [FAIL] 滑块进度为半透明"); failures++; }
+                else Console.WriteLine($"  [PASS] 滑块进度为半透明 (bg差异 {Diff(pr, prL)})");
 
-                // 玻璃质感（非平涂）：勾选框选中顶部高光带亮度应明显高于底部暗带。
-                double cbTop = AverageLum(bmp, 64, 11, 76, 15);
-                double cbBot = AverageLum(bmp, 64, 25, 76, 29);
-                bool cbGrad = cbTop > cbBot + 20;
-                Console.WriteLine($"  [{(cbGrad ? "PASS" : "FAIL")}] 勾选框选中玻璃高光 (top={cbTop:F0} > bottom={cbBot:F0}+20)");
-                if (!cbGrad) failures++;
+                // 6. 圆钮偏白亮（中性、亮）。
+                var th = AvgColor(bmpD, 206, 64, 218, 74);
+                bool thWhite = th.R > 140 && th.G > 140 && th.B > 140 && Math.Abs(th.R - th.B) < 40;
+                Console.WriteLine($"  [{(thWhite ? "PASS" : "FAIL")}] 滑块圆钮偏白亮 ({th})");
+                if (!thWhite) failures++;
 
-                // 玻璃球：圆钮顶部纯白带亮度应高于底部偏蓝带（渐变球）。
-                double thTop = AverageLum(bmp, 206, 62, 218, 66);
-                double thBot = AverageLum(bmp, 206, 74, 218, 78);
-                bool thGrad = thTop > thBot + 20;
-                Console.WriteLine($"  [{(thGrad ? "PASS" : "FAIL")}] 圆钮玻璃球渐变 (top={thTop:F0} > bottom={thBot:F0}+20)");
-                if (!thGrad) failures++;
+                // 7. 圆钮半透明。
+                var thL = AvgColor(bmpL, 206, 64, 218, 74);
+                if (!Differs(th, thL, 8)) { Console.WriteLine("  [FAIL] 滑块圆钮为半透明"); failures++; }
+                else Console.WriteLine($"  [PASS] 滑块圆钮为半透明 (bg差异 {Diff(th, thL)})");
 
-                // 输出控件质感 PNG 供人工查看（黑底场景，验证高光/渐变层次）。
+                // 8. 未填充轨道偏亮 + 半透明。
+                var tr = AvgColor(bmpD, 230, 67, 260, 71);
+                bool trLight = tr.R > 35 && tr.R < 120 && Math.Abs(tr.R - tr.G) < 14;
+                Console.WriteLine($"  [{(trLight ? "PASS" : "FAIL")}] 未填充轨道偏亮 ({tr})");
+                if (!trLight) failures++;
+                var trL = AvgColor(bmpL, 230, 67, 260, 71);
+                if (!Differs(tr, trL, 8)) { Console.WriteLine("  [FAIL] 未填充轨道为半透明"); failures++; }
+                else Console.WriteLine($"  [PASS] 未填充轨道为半透明 (bg差异 {Diff(tr, trL)})");
+
+                // 输出控件质感 PNG 供人工查看（深玻璃背景场景）。
                 try
                 {
                     string outDir = Path.Combine(Path.GetTempPath(), "opencode");
                     Directory.CreateDirectory(outDir);
                     string pngPath = Path.Combine(outDir, "controls-test.png");
-                    using (var img = SKImage.FromBitmap(bmp))
+                    using (var img = SKImage.FromBitmap(bmpD))
                     using (var data = img.Encode(SKEncodedImageFormat.Png, 100))
                         File.WriteAllBytes(pngPath, data.ToArray());
                     Console.WriteLine($"  PNG saved: {pngPath}");
@@ -99,35 +114,28 @@ namespace CuRmlGUI.RenderTest
             return failures;
         }
 
-        /// <summary>在区域内统计满足条件的像素；区域非空即视为通过（对圆角/抗锯齿稳健）。</summary>
-        private static int CheckRegionColor(SKBitmap bmp, string name, int x0, int y0, int x1, int y1,
-            Func<SKColor, bool> ok)
-        {
-            int hits = 0;
-            for (int y = y0; y < y1; y++)
-                for (int x = x0; x < x1; x++)
-                {
-                    if (!ok(bmp.GetPixel(x, y))) continue;
-                    hits++;
-                    break;   // 找到一个命中即可
-                }
-            bool pass = hits > 0;
-            Console.WriteLine($"  [{(pass ? "PASS" : "FAIL")}] {name} (hits={hits})");
-            return pass ? 0 : 1;
-        }
+        private struct Color { public byte R, G, B; public override string ToString() => $"({R},{G},{B})"; }
 
-        /// <summary>区域平均亮度（R+G+B 之和 / 像素数），用于量化渐变层次。</summary>
-        private static double AverageLum(SKBitmap bmp, int x0, int y0, int x1, int y1)
+        /// <summary>区域平均颜色，用于稳定采样（避开抗锯齿边缘）。</summary>
+        private static Color AvgColor(SKBitmap bmp, int x0, int y0, int x1, int y1)
         {
-            long sum = 0; int n = 0;
+            long r = 0, g = 0, b = 0; int n = 0;
             for (int y = y0; y < y1; y++)
                 for (int x = x0; x < x1; x++)
                 {
                     var c = bmp.GetPixel(x, y);
-                    sum += c.Red + c.Green + c.Blue; n++;
+                    r += c.Red; g += c.Green; b += c.Blue; n++;
                 }
-            return n == 0 ? 0 : (double)sum / n;
+            return new Color { R = (byte)(r / n), G = (byte)(g / n), B = (byte)(b / n) };
         }
+
+        /// <summary>任一通道差超过容差即视为颜色不同（半透明透出背景）。</summary>
+        private static bool Differs(Color a, Color b, int tol) =>
+            Math.Abs(a.R - b.R) > tol || Math.Abs(a.G - b.G) > tol || Math.Abs(a.B - b.B) > tol;
+
+        /// <summary>最大单通道差。</summary>
+        private static int Diff(Color a, Color b) =>
+            Math.Max(Math.Max(Math.Abs(a.R - b.R), Math.Abs(a.G - b.G)), Math.Abs(a.B - b.B));
 
         private static SKBitmap RenderCss(string rml, string css, string fontPath)
         {
@@ -219,9 +227,9 @@ namespace CuRmlGUI.RenderTest
 </body>
 </rml>";
 
-        // 库默认深色主题（checkbox 部分）+ 演示页 iOS 覆盖，证明覆盖胜出。
+        // 库默认深色主题（会被下方 iOS 覆盖压掉）+ 演示页 iOS 半透明玻璃覆盖（与 LiquidGlassDemo.cs 一致）。
         private const string Css = @"
-body { width: 100%; height: 100%; background-color: #000000; font-family: __FAMILY__; }
+body { width: 100%; height: 100%; background-color: __BG__; font-family: __FAMILY__; }
 #unchecked { position: absolute; left: 10px; top: 10px; }
 #checked   { position: absolute; left: 60px; top: 10px; }
 #range     { position: absolute; left: 10px; top: 60px; width: 300px; }
@@ -239,37 +247,24 @@ input[type=range] sliderbar { width: 16px; height: 16px; margin-top: 1px; margin
 
 /* —— 演示页 iOS 覆盖（与 LiquidGlassDemo.cs 一致）—— */
 input[type=checkbox] {
-  width: 20px; height: 20px; background-color: rgba(255,255,255,0.10);
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.28) 20%, rgba(255,255,255,0.04) 45%,
-      rgba(255,255,255,0.00) 80%, rgba(255,255,255,0.16) 100%);
-  border-width: 1px; border-color: rgba(255,255,255,0.50); border-radius: 6px;
+  width: 20px; height: 20px; background-color: rgba(255,255,255,0.12);
+  border-width: 1px; border-color: rgba(255,255,255,0.35); border-radius: 6px;
 }
 input[type=checkbox]:checked {
-  background-color: #0A84FF;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.30) 22%, rgba(255,255,255,0.05) 45%,
-      rgba(0,0,0,0.00) 62%, rgba(0,0,0,0.00) 82%, rgba(0,0,0,0.24) 100%);
-  border-color: rgba(255,255,255,0.85);
+  background-color: rgba(10,132,255,0.55);
+  border-color: rgba(255,255,255,0.60);
 }
 input[type=range] slidertrack {
-  height: 4px; margin-top: 7px; background-color: rgba(255,255,255,0.18);
-  decorator: linear-gradient(180deg,
-      rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.08) 45%, rgba(255,255,255,0.15) 100%);
+  height: 4px; margin-top: 7px; background-color: rgba(255,255,255,0.20);
   border-radius: 2px;
 }
 input[type=range] sliderprogress {
-  height: 4px; margin-top: 0px; background-color: #0A84FF;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.12) 40%, rgba(0,0,0,0.00) 62%, rgba(0,0,0,0.22) 100%);
+  height: 4px; margin-top: 0px; background-color: rgba(10,132,255,0.55);
   border-radius: 2px;
 }
 input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
-  border-radius: 9px; background-color: #ffffff;
-  decorator: linear-gradient(180deg,
-      rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.75) 42%, rgba(214,224,248,0.55) 100%);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  border-radius: 9px; background-color: rgba(255,255,255,0.65);
 }
 ";
     }
