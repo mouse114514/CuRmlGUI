@@ -66,15 +66,6 @@
       <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Casualties Unknown\CasualtiesUnknown_Data\Managed\UnityEngine.ScreenCaptureModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <!-- uGUI presentation layer (Canvas / RawImage / CanvasScaler). -->
-    <Reference Include="UnityEngine.UI">
-      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.UI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIModule">
-      <HintPath>E:\work\Cu-SaveManager-main\references\UnityEngine.UIModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
   </ItemGroup>
 
   <ItemGroup>

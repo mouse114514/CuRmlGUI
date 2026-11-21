@@ -30,9 +30,7 @@ namespace CuRmlGUI
         private ConfigEntry<bool> _spikeEnabled;
         private ConfigEntry<bool> _spikeAutoShow;
         private ConfigEntry<KeyCode> _spikeToggleKey;
-        private ConfigEntry<PresentationMode> _spikePresentation;
         private ConfigEntry<float> _spikeDpiScale;
-        private ConfigEntry<int> _spikeSortingOrder;
         private ConfigEntry<bool> _spikeBackdrop;
         private ConfigEntry<BackdropBlurMode> _spikeBackdropBlur;
         private ConfigEntry<int> _spikeFakeBlurScale;
@@ -72,17 +70,9 @@ namespace CuRmlGUI
                 "Spike", "ToggleKey", KeyCode.F1,
                 "显示/隐藏 spike 覆盖层的按键。");
 
-            _spikePresentation = Config.Bind(
-                "Spike", "Presentation", PresentationMode.ImGui,
-                "呈现方式：ImGui（GUI.DrawTexture）或 UGui（Canvas + RawImage）。用于 A/B 实测。");
-
             _spikeDpiScale = Config.Bind(
                 "Spike", "DpiScale", 1f,
                 "dp → px 比例；1 表示 1dp = 1px。高分屏可设为 1.5/2。");
-
-            _spikeSortingOrder = Config.Bind(
-                "Spike", "SortingOrder", 30000,
-                "uGUI 呈现时 Canvas 的 sortingOrder（越大越靠上）。");
 
             _spikeBackdrop = Config.Bind(
                 "Spike", "Backdrop", false,
@@ -105,7 +95,7 @@ namespace CuRmlGUI
             // 创建的新对象会被游戏的首个场景加载销毁（实测日志里紧跟一条 OnDestroy）。
             // 直接挂在插件自己的 GameObject 上，生命周期由 BepInEx 保证。
             var overlay = gameObject.AddComponent<WebGuiSpikeOverlay>();
-            overlay.Init(_spikeToggleKey.Value, _spikePresentation.Value,
+            overlay.Init(_spikeToggleKey.Value,
                 _spikeDpiScale.Value, Logger, _spikeAutoShow.Value, _spikeBackdrop.Value,
                 _spikeBackdropBlur.Value, _spikeFakeBlurScale.Value);
             Logger.LogInfo("Spike overlay created (press " + _spikeToggleKey.Value +

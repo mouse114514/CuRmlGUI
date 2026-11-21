@@ -4,7 +4,7 @@
 
 用 RML/RCSS（RmlUi 的 HTML/CSS 方言）定义组件与样式，由重编译的 **RmlUi 6.3**
 原生运行时解析与布局，**SkiaSharp** 光栅化/合成，再经 Unity 纹理桥接到
-IMGUI 或 uGUI 呈现。**只做渲染，绝不执行 JavaScript。**
+IMGUI（`GUI.DrawTexture`）呈现。**只做渲染，绝不执行 JavaScript。**
 
 本插件是「库模组」：默认不注入任何 UI，只负责初始化原生运行时与字体，
 供其他模组通过 `WebGuiView` 使用。
@@ -42,7 +42,7 @@ view.SetElementText("hello", "更新后的文本");   // 通过 RmlUi DOM 回写
 
 // 每帧（主线程）：
 view.Update();                              // 有变化才重绘并上传纹理
-Graphics.DrawTexture(rect, view.Texture);   // 或交给 uGUI RawImage
+Graphics.DrawTexture(rect, view.Texture);   // IMGUI 呈现
 ```
 
 ### 输入（坐标：左上原点）
@@ -152,9 +152,7 @@ Fake 只影响 **backdrop 链**（source = 基座图层）上的 `blur()`；普�
 | `Enabled` | `false` | 启用 spike 覆盖层 |
 | `AutoShow` | `false` | 启动即显示（免按键，供自动化截图） |
 | `ToggleKey` | `F1` | 显隐按键 |
-| `Presentation` | `ImGui` | `ImGui` / `UGui` |
 | `DpiScale` | `1` | dp→px 比例 |
-| `SortingOrder` | `30000` | uGUI Canvas 层序 |
 | `Backdrop` | `false` | 抓屏注入 backdrop（毛玻璃模糊源） |
 | `BackdropBlur` | `Real` | `Real` 高斯 / `Fake` 伪模糊（低采样放大） |
 | `FakeBlurScale` | `16` | Fake 模式的抓屏降采样除数（≈等效模糊半径，越大越糊越省） |
@@ -162,13 +160,13 @@ Fake 只影响 **backdrop 链**（source = 基座图层）上的 `blur()`；普�
 启用毛玻璃演示：`Enabled = true`、`AutoShow = true`、`Backdrop = true`，
 玻璃面板 `#glass` 会显示背后游戏画面的模糊效果。
 
-实测（1920×1080，15 fps 抓屏、按需渲染、ScreenCapture 抓最终 framebuffer、
-alpha 蒙版剔除自己 UI）：
+实测（1920×1080，15 fps 抓屏、按需渲染、ScreenCapture 抓最终 framebuffer；
+抓屏发生在自己 IMGUI 绘制之前，画面天然不含自己 UI，无需蒙版剔除）：
 
-| 模式 | 抓屏 | 渲染（均摊） | 真正重绘 |
+| 模式 | 抓屏 | 渲染（均摊） | 说明 |
 | --- | --- | --- | --- |
-| Real（固定 1/4 抓屏） | 1.6 ms/帧 | 2.9 ms/帧 | 84–86 / 272–276（≈31%） |
-| Fake（FakeBlurScale=16） | 1.1 ms/帧 | 1.65 ms/帧 | 84–85 / 313–315（≈27%） |
+| Real（1/2 抓屏） | ≈1 ms/帧 | ≈5 ms/帧 | Skia 高斯模糊；数值随场景/硬件波动 |
+| Fake（FakeBlurScale=16） | 更低 | 更低 | 不执行模糊，靠低采样放大近似；观感更“假” |
 
 ## 架构
 
@@ -181,7 +179,7 @@ RML/RCSS ──► RmlUi 6.3（重编译, /MT, C ABI shim）
                 ▼
            Unity Texture2D（整张 Apply）
                 ▼
-        IMGUI（GUI.DrawTexture）或 uGUI（Canvas + RawImage）
+        IMGUI（GUI.DrawTexture）
 ```
 
 - **原生 shim**（`native/shim/webgui_shim.cpp`）：纯 C ABI（`const char*`/`void*`/
@@ -191,8 +189,7 @@ RML/RCSS ──► RmlUi 6.3（重编译, /MT, C ABI shim）
   组合模式，必须用 `SKBlendMode.Modulate`（`SrcOver` 会把透明像素画成实心白块）；
   UV 乘纹理尺寸得到像素坐标；顶点色做反预乘（RmlUi 给的是预乘 0xRRGGBBAA）。
   Y 轴：Skia top-down 输出、Unity 纹理 bottom-up → 合成器 `flipY` CTM。
-- **呈现层**：`PresentationMode.ImGui` / `PresentationMode.UGui`，配置切换。
-  uGUI 用 ScreenSpaceOverlay + 全屏 RawImage + `CanvasScaler.ConstantPixelSize`。
+- **呈现层**：IMGUI（`GUI.DrawTexture`）绘制整张纹理。
 - **backdrop**（毛玻璃模糊源）：由 C# 抓屏注入，`SkiaCompositor` 只把它当作
   `backdrop-filter` 的输入，**永不绘入最终输出**。方向约定：基座保持 flipY
   （bottom-up），离屏图层用 identity（top-down），`GetSnapshot` 仅在 `_flipY` 时
@@ -256,12 +253,12 @@ cd tools\render-test\bin\Release\net472
 | `HasBackdrop` | 是否有 backdrop 注入 |
 | `BackdropBlurMode` | `Real`（Skia 高斯）/ `Fake`（伪模糊：低采样放大，成本≈0） |
 | `Texture` / `Width` / `Height` | 结果纹理（RGBA32）与尺寸 |
+| `MaxRenderFps` | 连续动画的最大重绘帧率（fps，默认 30，0=不限）；输入/文档/backdrop 变更仍立即重绘 |
 | `ElementEvent` | 事件：(eventType, elementId)，如 `click`/`mouseover`/`change` |
 | `MouseMove/Down/Up/Wheel` | 鼠标输入（左上原点逻辑像素） |
 | `KeyDown/KeyUp` | 键盘（`KeyCode` → RmlUi 键标识） |
 | `TextInput(char)` / `TextInputCodepoint(uint)` | 文本输入（代理对走码点） |
 | `WebGuiFonts.LatinPath` / `.CjkPath` / `.LoadDefault(view)` | CuRmlGUI 发行字体路径与加载 |
-| `PresentationMode.ImGui` / `.UGui` | 呈现层选择（OnGUI 或 Canvas+RawImage） |
 
 ### 按需渲染
 

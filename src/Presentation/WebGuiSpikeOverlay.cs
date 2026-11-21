@@ -14,15 +14,13 @@ namespace CuRmlGUI.Presentation
     ///
     /// 它不是最终 API：仅验证
     ///   1) 原生 RmlUi → Skia 合成 → Unity 纹理 全链路在游戏内可用；
-    ///   2) IMGUI 与 uGUI 两种呈现方式的 A/B；
-    ///   3) 鼠标/键盘/文本输入能否驱动 RmlUi（按钮点击、文本输入）。
+    ///   2) 鼠标/键盘/文本输入能否驱动 RmlUi（按钮点击、文本输入）。
     ///
     /// 快捷键切换显隐；坐标以屏幕左上角为原点。
     /// </summary>
     internal sealed class WebGuiSpikeOverlay : MonoBehaviour
     {
         private KeyCode _toggleKey = KeyCode.F1;
-        private PresentationMode _mode = PresentationMode.ImGui;
         private float _dpiScale = 1f;
         private ManualLogSource _log;
         private string _fontFamily = "Liberation Sans";
@@ -41,7 +39,6 @@ namespace CuRmlGUI.Presentation
         private int _fakeBlurScale = 16;
 
         private WebGuiView _view;
-        private UguiPresenter _ugui;
         private bool _visible;
         private bool _failed;
 
@@ -58,12 +55,11 @@ namespace CuRmlGUI.Presentation
         // 需要转发「按下/抬起」的特殊键（字母/数字也转发，便于 Ctrl+A/C/V 等快捷键）。
         private static readonly KeyCode[] Keys = BuildKeyList();
 
-        public void Init(KeyCode toggleKey, PresentationMode mode, float dpiScale, ManualLogSource log,
+        public void Init(KeyCode toggleKey, float dpiScale, ManualLogSource log,
             bool autoShow = false, bool backdrop = false,
             BackdropBlurMode blurMode = BackdropBlurMode.Real, int fakeBlurScale = 16)
         {
             _toggleKey = toggleKey;
-            _mode = mode;
             _dpiScale = dpiScale <= 0f ? 1f : dpiScale;
             _log = log;
             _autoShow = autoShow;
@@ -98,17 +94,7 @@ namespace CuRmlGUI.Presentation
                 EnsureSize();
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                // backdrop 抓屏只在 ImGui 模式可用：抓屏发生在 OnGUI（我们绘制之前），
-                // 而 UGui 模式不走 OnGUI。非 ImGui 时显式禁用并提示一次，避免静默无效。
-                bool backdropActive = _backdropCapture && _mode == PresentationMode.ImGui;
-                if (_backdropCapture && !backdropActive && !_backdropWarned)
-                {
-                    _backdropWarned = true;
-                    _log?.LogWarning(
-                        "[CuRmlGUI] backdrop 仅在 ImGui 呈现模式下可用，当前为 " + _mode +
-                        "，已跳过毛玻璃抓屏（玻璃将无模糊源）。");
-                }
-                if (backdropActive)
+                if (_backdropCapture)
                 {
                     ReadBackdrop();
                     RequestBackdropCapture();
@@ -119,7 +105,7 @@ namespace CuRmlGUI.Presentation
                 sw2.Stop();
                 if (updated) _renderFrames++;
 
-                if (backdropActive)
+                if (_backdropCapture)
                 {
                     _costAccumMs += sw.Elapsed.TotalMilliseconds;
                     _renderAccumMs += sw2.Elapsed.TotalMilliseconds;
@@ -139,9 +125,6 @@ namespace CuRmlGUI.Presentation
                     }
                 }
 
-                if (_mode == PresentationMode.UGui && _ugui != null)
-                    _ugui.SetTexture(_view.Texture);
-
                 ForwardMouse();
                 ForwardKeyboard();
             }
@@ -154,7 +137,7 @@ namespace CuRmlGUI.Presentation
 
         private void OnGUI()
         {
-            if (_failed || !_visible || _mode != PresentationMode.ImGui || _view == null)
+            if (_failed || !_visible || _view == null)
                 return;
 
             // Repaint 阶段：UGUI 画布（游戏世界 + 游戏 HUD）已经画进后备缓冲，而 IMGUI
@@ -184,7 +167,6 @@ namespace CuRmlGUI.Presentation
         private void SetVisible(bool visible)
         {
             _visible = visible;
-            if (_ugui != null) _ugui.SetVisible(visible);
             if (!visible)
             {
                 // 隐藏时丢弃未消费的抓屏，避免再次显示时套用旧帧。
@@ -211,12 +193,6 @@ namespace CuRmlGUI.Presentation
 
             if (!_view.LoadDocument(SpikeRml, SpikeCss.Replace("__FAMILY__", _fontFamily)))
                 _log?.LogError("[CuRmlGUI] Spike document failed to load.");
-
-            if (_mode == PresentationMode.UGui)
-            {
-                _ugui = new UguiPresenter("CuRmlGUI.SpikeCanvas", 30000);
-                _ugui.SetVisible(true);
-            }
         }
 
         private void LoadFonts()
@@ -345,7 +321,6 @@ namespace CuRmlGUI.Presentation
         private Texture2D _pendingShot;   // 已抓屏、待读回像素
         private bool _grabRequested;       // 已排队，等 OnGUI 抓
         private float _nextCapture;
-        private bool _backdropWarned;      // 已提示「非 ImGui 模式不支持抓屏」
 
         /// <summary>OnGUI Repaint 阶段抓取最终屏幕（不含我们的 IMGUI），留待下一帧读回。</summary>
         private void GrabBackdrop()
@@ -484,8 +459,6 @@ namespace CuRmlGUI.Presentation
 
         private void OnDestroy()
         {
-            _ugui?.Dispose();
-            _ugui = null;
             _view?.Dispose();
             _view = null;
 
