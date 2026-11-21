@@ -77,10 +77,18 @@
 ### 9. `outline` —— 不支持【低】
 - 影响：焦点描边只能用 `border`（会占布局）或 `box-shadow`（外阴影）近似。
 
-### 10. SVG 滤镜 / 折射（`filter: url(#...)`）—— 不可能【液态玻璃最大限制】
-- **现象**：没有 SVG 滤镜，也没有「背景折射/扭曲」。
-- **影响**：Apple 液态玻璃的「沿曲线边缘折射背景」无法真实还原；只能靠 backdrop blur + 亮边 + 渐变近似。
-- **建议**：明确接受近似，不做「真折射」。
+### 10. 折射 / 液态玻璃扭曲 —— **可做**（需新增自定义滤镜 + ABI + 位移图）【液态玻璃关键】
+- **不是不可能**：合成器用的 SkiaSharp 1.68.3 暴露了
+  `SKImageFilter.CreateDisplacementMapEffect`（位移贴图）、`CreateMagnifier`（透镜）、
+  `CreateDistantLitSpecular` / `PointLitSpecular`（镜面高光）、`CreateMatrixConvolution`（卷积）、
+  `CreateCompose` / `CreateMerge`（组合）。这些足以实现「边缘弯折背景 + 镜面 rim」。
+  唯一没有的是 `SKRuntimeEffect`（自定义 GLSL），但上述内置滤镜已覆盖所需效果。
+- **缺的是驱动层**：RmlUi 的 `filter`/`backdrop-filter` 只认已注册的滤镜名（`blur`/`drop-shadow`）。
+  要加自定义效果，需要在 shim 里 `Factory::RegisterFilterInstancer("liquid-glass", ...)`
+  注册一个自定义滤镜，扩展 `WG_FilterParams`（位移强度/高光等），并在 C# `CompileFilter`
+  里用上面的 Skia API 组装滤镜链。
+- **还需要**：一张位移法线图（可按元素的圆角矩形程序化生成，如「边缘法线」渐变，或内置资产）。
+- **建议**：作为独立特性实现 `liquid-glass` 自定义滤镜（blur + saturate + displacement + specular 组合）。
 
 ### 11. 其他小项（待补时再确认）
 - 多层 `box-shadow`（逗号列表）/ 多背景层：疑似只支持单层。
@@ -101,9 +109,32 @@
 
 ## 四、建议的补齐优先级（供排期）
 
-1. `box-shadow: inset`（边缘高光 —— 液态玻璃收益最大）
-2. `background` 渐变（与 background-color/多层叠加）
-3. `clip-path` 基础形状
-4. `text-shadow`
-5. `::before/::after` 约定类名方案（RML 显式元素辅助）
-6. 其余（grid/sticky/aspect-ratio/outline）按需
+1. `liquid-glass` 自定义滤镜（真实折射 + 镜面 rim —— 见下方第五节）
+2. `box-shadow: inset`（边缘内高光）
+3. `background` 渐变（与 background-color/多层叠加）
+4. `clip-path` 基础形状
+5. `text-shadow`
+6. `::before/::after` 约定类名方案（RML 显式元素辅助）
+7. 其余（grid/sticky/aspect-ratio/outline）按需
+
+---
+
+## 五、液态玻璃（Liquid Glass）实现路径（可行）
+
+**渲染端已具备（SkiaSharp 1.68.3 的 SKImageFilter）**
+- `CreateDisplacementMapEffect`：用位移图弯折背景（边缘折射）。
+- `CreateMagnifier`：局部透镜放大（玻璃凸起感）。
+- `CreateDistantLitSpecular` / `PointLitSpecular` / `SpotLitSpecular`：镜面高光（rim）。
+- `CreateMatrixConvolution`：卷积（描边/法线）。
+- `CreateCompose` / `CreateMerge`：把 blur / saturate / 折射 / 高光叠起来。
+
+**驱动端需要补**
+1. shim 里 `Factory::RegisterFilterInstancer("liquid-glass", ...)` 注册自定义滤镜，并解析参数
+   （位移强度、透镜半径、高光强弱、blur、saturate）。
+2. 扩展 `WG_FilterParams` / C ABI，把这些参数传到托管侧。
+3. C# `CompileFilter("liquid-glass", …)` 组装滤镜链：
+   `blur → displacement(边缘法线图) → specular → compose`。
+4. 程序化生成/内置位移法线图（圆角矩形的边缘法线）。
+5. 再叠 `box-shadow: inset`（缺口 2）+ 渐变（缺口 3）做玻璃本体与高光。
+
+这样即可做出接近 iOS 26 的液态玻璃：**真实背景模糊 + 边缘折射弯折 + 镜面高光**。
