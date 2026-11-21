@@ -33,8 +33,8 @@ namespace CuRmlGUI.Presentation
 
         // 真·毛玻璃：抓游戏画面作为 backdrop 注入（节流 + 降采样）。
         private bool _backdropCapture;
-        // 抓屏节流：玻璃背景 20fps（每次抓屏是同步读回，成本远高于重绘）。
-        private const float CaptureInterval = 1f / 20f;
+        // 抓屏节流：玻璃背景 30fps（GPU 降采样后读回，CPU 只做行翻转 + 盒式平滑）。
+        private const float CaptureInterval = 1f / 30f;
         private const int BackdropScale = 2;              // Real 模式降采样 1/2（玻璃后内容可辨）
         // 模糊实现方式：Fake=1/2 降采样 + 可分离盒式平滑（加权平均，无高斯）；Real=Skia 高斯。
         private BackdropBlurMode _blurMode = BackdropBlurMode.Fake;
@@ -420,21 +420,46 @@ namespace CuRmlGUI.Presentation
         private bool _grabRequested;       // 已排队，等 OnGUI 抓
         private float _nextCapture;
 
-        /// <summary>OnGUI Repaint 阶段抓取最终屏幕（不含我们的 IMGUI），留待下一帧读回。</summary>
+        /// <summary>OnGUI Repaint 阶段抓取最终屏幕，并在 GPU 上降采样后读回（避免整屏 8MB 同步读回）。</summary>
         private void GrabBackdrop()
         {
             if (!_grabRequested) return;
             if (Event.current == null || Event.current.type != EventType.Repaint) return;
             _grabRequested = false;
+
+            Texture2D full = null;
+            RenderTexture rt = null;
+            var prevActive = RenderTexture.active;
             try
             {
                 if (_pendingShot != null) { Destroy(_pendingShot); _pendingShot = null; }
-                _pendingShot = ScreenCapture.CaptureScreenshotAsTexture();
+
+                full = ScreenCapture.CaptureScreenshotAsTexture();
+                int dw = Mathf.Max(1, full.width / CaptureDivisor);
+                int dh = Mathf.Max(1, full.height / CaptureDivisor);
+
+                // 只把「已抓好的最终画面」blit 到小 RT —— 不是从相机目标抓，
+                // 因此没有 URP 下 Graphics.Blit(null, rt) 的偏移/缩放问题。
+                rt = RenderTexture.GetTemporary(dw, dh, 0, RenderTextureFormat.ARGB32,
+                    RenderTextureReadWrite.sRGB);
+                Graphics.Blit(full, rt);
+                RenderTexture.active = rt;
+
+                var small = new Texture2D(dw, dh, TextureFormat.RGBA32, false);
+                small.ReadPixels(new Rect(0, 0, dw, dh), 0, 0);
+                small.Apply(false, false);
+                _pendingShot = small;
             }
             catch (Exception e)
             {
                 _log?.LogError("[CuRmlGUI] Backdrop grab failed: " + e);
                 _nextCapture = Time.unscaledTime + 1f;
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                if (full != null) Destroy(full);
             }
         }
 
@@ -456,23 +481,37 @@ namespace CuRmlGUI.Presentation
             try
             {
                 int sw = shot.width, sh = shot.height;
-                int dw = Mathf.Max(1, sw / CaptureDivisor);
-                int dh = Mathf.Max(1, sh / CaptureDivisor);
+                // GrabBackdrop 已在 GPU 上降采样到目标尺寸，这里不再做 CPU 降采样。
+                int dw = sw, dh = sh;
 
                 int n = dw * dh * 4;
                 if (_backdropRgba == null || _backdropRgba.Length != n)
                     _backdropRgba = new byte[n];
 
-                // 直接读原始字节：GetRawTextureData 是 NativeArray 视图，不产生 8MB 托管数组
-                // （GetPixels32 每次会分配 sw*sh 个 Color32）。RGB24 为 3 字节/像素，RGBA32
-                // 为 4 字节；按 raw.Length/(sw*sh) 推断。行序为 bottom-up（第 0 行 = 屏幕底部）。
+                // GetRawTextureData 是 NativeArray 视图；行序 bottom-up，这里只做翻转到 top-down。
                 var raw = shot.GetRawTextureData<byte>();
                 int bpp = raw.Length / (sw * sh);
-                if (bpp == 3 || bpp == 4)
+                if (bpp == 4)
                 {
-                    // 盒式降采样：每个目标像素 = 对应源 cell 内**所有像素的加权平均**
-                    // （权重全 1，覆盖整个 cell）。它与双线性同属加权平均，但采样范围更宽，
-                    // 放大后是平滑过渡而不是点采样的大色块；不涉及任何高斯/卷积模糊。
+                    unsafe
+                    {
+                        byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
+                            .GetUnsafeReadOnlyPtr(raw);
+                        fixed (byte* dstBase = _backdropRgba)
+                        {
+                            int rowBytes = dw * 4;
+                            for (int y = 0; y < dh; y++)
+                            {
+                                Buffer.MemoryCopy(
+                                    src + y * rowBytes,
+                                    dstBase + (dh - 1 - y) * rowBytes,
+                                    rowBytes, rowBytes);
+                            }
+                        }
+                    }
+                }
+                else if (bpp == 3)
+                {
                     unsafe
                     {
                         byte* src = (byte*)Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility
@@ -481,40 +520,12 @@ namespace CuRmlGUI.Presentation
                         {
                             for (int y = 0; y < dh; y++)
                             {
-                                int sy0 = y * sh / dh;
-                                int sy1 = (y + 1) * sh / dh;
-                                if (sy1 <= sy0) sy1 = sy0 + 1;
-                                if (sy1 > sh) sy1 = sh;
-                                int dstRow = (dh - 1 - y) * dw;   // bottom-up → top-down
-
+                                byte* s = src + y * sw * 3;
+                                byte* d = dstBase + (dh - 1 - y) * dw * 4;
                                 for (int x = 0; x < dw; x++)
                                 {
-                                    int sx0 = x * sw / dw;
-                                    int sx1 = (x + 1) * sw / dw;
-                                    if (sx1 <= sx0) sx1 = sx0 + 1;
-                                    if (sx1 > sw) sx1 = sw;
-
-                                    int r = 0, g = 0, b = 0, a = 0, cnt = 0;
-                                    for (int yy = sy0; yy < sy1; yy++)
-                                    {
-                                        byte* p = src + (yy * sw + sx0) * bpp;
-                                        for (int xx = sx0; xx < sx1; xx++)
-                                        {
-                                            r += p[0];
-                                            g += p[1];
-                                            b += p[2];
-                                            a += bpp >= 4 ? p[3] : 255;
-                                            p += bpp;
-                                            cnt++;
-                                        }
-                                    }
-                                    if (cnt == 0) cnt = 1;
-
-                                    byte* d = dstBase + (dstRow + x) * 4;
-                                    d[0] = (byte)(r / cnt);
-                                    d[1] = (byte)(g / cnt);
-                                    d[2] = (byte)(b / cnt);
-                                    d[3] = (byte)(a / cnt);
+                                    d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
+                                    s += 3; d += 4;
                                 }
                             }
                         }
@@ -526,11 +537,11 @@ namespace CuRmlGUI.Presentation
                     var px = shot.GetPixels32();
                     for (int y = 0; y < dh; y++)
                     {
-                        int srcRow = (y * sh / dh) * sw;
+                        int srcRow = y * sw;
                         int dstRow = (dh - 1 - y) * dw;
                         for (int x = 0; x < dw; x++)
                         {
-                            var c = px[srcRow + x * sw / dw];
+                            var c = px[srcRow + x];
                             int o = (dstRow + x) * 4;
                             _backdropRgba[o] = c.r;
                             _backdropRgba[o + 1] = c.g;
@@ -693,31 +704,31 @@ namespace CuRmlGUI.Presentation
     </div>
 
     <div id=""widgets"">
-      <div class=""card weather""><div class=""sheen""></div>
+      <div class=""card weather"">
         <div class=""w-head""><span class=""w-city"">未知星球</span><span class=""w-temp"">-4°</span></div>
         <div class=""w-desc"">多云 · 最高 -1°</div>
         <div class=""w-hours""><span>10时 -3°</span><span>11时 -2°</span><span>12时 0°</span><span>13时 1°</span></div>
       </div>
 
-      <div class=""card music""><div class=""sheen""></div>
+      <div class=""card music"">
         <div class=""album""></div>
         <div class=""m-meta""><span class=""m-title"">Liquid Dreams</span><span class=""m-sub"">CuRmlGUI Radio</span></div>
         <div class=""m-play"">PLAY</div>
       </div>
 
-      <div class=""card cal""><div class=""sheen""></div>
+      <div class=""card cal"">
         <div class=""cal-day"">21</div>
         <div class=""cal-meta""><span class=""cal-title"">今天</span><span class=""cal-sub"">3 个日程</span></div>
       </div>
 
-      <div class=""card battery""><div class=""sheen""></div>
+      <div class=""card battery"">
         <div class=""bat-num"">87%</div>
         <div class=""bat-bar""><div class=""bat-fill""></div></div>
         <div class=""bat-sub"">电量 · 预计 6 小时</div>
       </div>
     </div>
 
-    <div class=""card cc""><div class=""sheen""></div>
+    <div class=""card cc"">
       <div class=""cc-grid"">
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">Wi-Fi</span></label>
         <label class=""tile""><input type=""checkbox"" checked=""""/><span class=""t-label"">蓝牙</span></label>
@@ -754,25 +765,14 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; }
 
 /* 液态玻璃：半透明冷色底 + 渐变高光（decorator）+ 背景模糊 + 圆角裁剪 */
 .card {
-  position: relative;
   pointer-events: auto;             /* 组件默认可拦截；容器已声明 none，故显式恢复 */
-  background-color: rgba(150,185,255,0.10);
-  decorator: linear-gradient(160deg, rgba(255,255,255,0.50) 0%, rgba(255,255,255,0.14) 12%, rgba(255,255,255,0.04) 45%, rgba(255,255,255,0.02) 66%, rgba(255,255,255,0.30) 100%);
+  background-color: rgba(255,255,255,0.08);
+  decorator: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.16) 3%, rgba(255,255,255,0.03) 12%, rgba(255,255,255,0.00) 45%, rgba(255,255,255,0.10) 100%);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.30);
-  border-top-color: rgba(255,255,255,0.72);
-  border-bottom-color: rgba(255,255,255,0.18);
+  border-color: rgba(255,255,255,0.55);
   border-radius: 28px;
   backdrop-filter: blur(14px) saturate(150%);
   box-shadow: 0 18px 48px rgba(0,0,0,0.45);
-}
-
-/* specular 高光：卡片顶部的亮线（显式元素；不加 overflow，避免逐绘制 clip mask） */
-.sheen {
-  position: absolute;
-  left: 26px; right: 26px; top: 1px; height: 2px;
-  pointer-events: none;
-  background-color: rgba(255,255,255,0.85);
 }
 
 .weather, .music, .cal, .battery { width: 270px; height: 148px; margin: 8px 8px 34px 8px; padding: 16px 18px; }
