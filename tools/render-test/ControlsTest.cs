@@ -48,14 +48,13 @@ namespace CuRmlGUI.RenderTest
 
             // —— CSS 文本断言：验证控件以「外阴影 + 内阴影」塑形，无底部白色反光、无彩色、无渐变。 ——
             failures += CheckContains(Css, "inset 0 1px 1px rgba(255,255,255,0.18)", "顶部淡高光");
-            failures += CheckContains(Css, "inset 0 -1px 2px rgba(0,0,0,0.30)", "底部内暗（厚度/内阴影）");
+            failures += CheckContains(Css, "inset 0 -2px 3px rgba(255,255,255,0.25)", "底部白灰环境光");
             failures += CheckContains(Css, "0 3px 6px", "外阴影（浮起）");
             failures += CheckContains(Css, "inset 0 2px 5px rgba(0,0,0,0.62)", "按下凹陷（内阴影）");
             failures += CheckContains(Css, "background-color: rgba(0,0,0,0.25)", "关闭态内部变暗");
             failures += CheckContains(Css, "background-color: transparent", "轨道透明");
             failures += CheckNotContains(Css, "#0A84FF", "无 iOS 蓝彩色");
             failures += CheckNotContains(Css, "decorator:", "无渐变");
-            failures += CheckNotContains(Css, "inset 0 -3px 4px rgba(255,255,255", "无底部白色反光（避免虚假）");
 
             // —— 渲染一次，输出 PNG 供人工查看（渲染不稳定，不作为断言依据）。 ——
             try
@@ -205,13 +204,13 @@ input[type=checkbox] {
   width: 20px; height: 20px; border-width: 0; border-radius: 6px;
   background-color: rgba(0,0,0,0.25);
   box-shadow: inset 0 1px 1px rgba(255,255,255,0.18),
-              inset 0 -1px 2px rgba(0,0,0,0.30),
+              inset 0 -2px 3px rgba(255,255,255,0.25),
               0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=checkbox]:checked {
   background-color: rgba(255,255,255,0.08);
   box-shadow: inset 0 1px 1px rgba(255,255,255,0.24),
-              inset 0 -1px 2px rgba(0,0,0,0.22),
+              inset 0 -2px 3px rgba(255,255,255,0.30),
               0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=checkbox]:active, input[type=checkbox]:checked:active {
@@ -220,7 +219,7 @@ input[type=checkbox]:active, input[type=checkbox]:checked:active {
 }
 input[type=range] slidertrack {
   height: 4px; margin-top: 7px; border-width: 0; background-color: transparent; border-radius: 2px;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(0,0,0,0.22);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(255,255,255,0.22);
 }
 input[type=range] sliderprogress {
   height: 4px; margin-top: 0px; background-color: rgba(255,255,255,0.18);
@@ -230,7 +229,7 @@ input[type=range] sliderbar {
   width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
   border-radius: 9px; background-color: rgba(255,255,255,0.15);
   box-shadow: inset 0 1px 1px rgba(255,255,255,0.30),
-              inset 0 -1px 2px rgba(0,0,0,0.20),
+              inset 0 -2px 3px rgba(255,255,255,0.28),
               0 3px 6px rgba(0,0,0,0.55);
 }
 input[type=range] sliderbar:active {
