@@ -66,6 +66,33 @@ namespace CuRmlGUI.RenderTest
                 // 未填充轨道（右侧）为半透明白：实测灰色轨道 x≈220..267，黑底上 rgba(255,255,255,0.22)≈#383838。
                 failures += CheckRegionColor(bmp, "未填充轨道为半透明白", 225, 67, 264, 71,
                     c => c.Red >= 30 && c.Red <= 100 && Math.Abs(c.Red - c.Green) < 12 && c.Blue < 90);
+
+                // 玻璃质感（非平涂）：勾选框选中顶部高光带亮度应明显高于底部暗带。
+                double cbTop = AverageLum(bmp, 64, 11, 76, 15);
+                double cbBot = AverageLum(bmp, 64, 25, 76, 29);
+                bool cbGrad = cbTop > cbBot + 20;
+                Console.WriteLine($"  [{(cbGrad ? "PASS" : "FAIL")}] 勾选框选中玻璃高光 (top={cbTop:F0} > bottom={cbBot:F0}+20)");
+                if (!cbGrad) failures++;
+
+                // 玻璃球：圆钮顶部纯白带亮度应高于底部偏蓝带（渐变球）。
+                double thTop = AverageLum(bmp, 206, 62, 218, 66);
+                double thBot = AverageLum(bmp, 206, 74, 218, 78);
+                bool thGrad = thTop > thBot + 20;
+                Console.WriteLine($"  [{(thGrad ? "PASS" : "FAIL")}] 圆钮玻璃球渐变 (top={thTop:F0} > bottom={thBot:F0}+20)");
+                if (!thGrad) failures++;
+
+                // 输出控件质感 PNG 供人工查看（黑底场景，验证高光/渐变层次）。
+                try
+                {
+                    string outDir = Path.Combine(Path.GetTempPath(), "opencode");
+                    Directory.CreateDirectory(outDir);
+                    string pngPath = Path.Combine(outDir, "controls-test.png");
+                    using (var img = SKImage.FromBitmap(bmp))
+                    using (var data = img.Encode(SKEncodedImageFormat.Png, 100))
+                        File.WriteAllBytes(pngPath, data.ToArray());
+                    Console.WriteLine($"  PNG saved: {pngPath}");
+                }
+                catch (Exception e) { Console.WriteLine("  PNG save failed: " + e.Message); }
             }
 
             Console.WriteLine(failures == 0 ? "  ALL CONTROLS CHECKS PASSED" : $"  {failures} CONTROLS CHECK(S) FAILED");
@@ -87,6 +114,19 @@ namespace CuRmlGUI.RenderTest
             bool pass = hits > 0;
             Console.WriteLine($"  [{(pass ? "PASS" : "FAIL")}] {name} (hits={hits})");
             return pass ? 0 : 1;
+        }
+
+        /// <summary>区域平均亮度（R+G+B 之和 / 像素数），用于量化渐变层次。</summary>
+        private static double AverageLum(SKBitmap bmp, int x0, int y0, int x1, int y1)
+        {
+            long sum = 0; int n = 0;
+            for (int y = y0; y < y1; y++)
+                for (int x = x0; x < x1; x++)
+                {
+                    var c = bmp.GetPixel(x, y);
+                    sum += c.Red + c.Green + c.Blue; n++;
+                }
+            return n == 0 ? 0 : (double)sum / n;
         }
 
         private static SKBitmap RenderCss(string rml, string css, string fontPath)
@@ -197,15 +237,40 @@ input[type=range] slidertrack { height: 2px; margin-top: 8px; background: rgba(2
 input[type=range] sliderprogress { height: 2px; margin-top: 0px; background: #6ea8ff; border-radius: 1px; }
 input[type=range] sliderbar { width: 16px; height: 16px; margin-top: 1px; margin-left: -8px; margin-right: -8px; border-radius: 8px; background: #ffffff; }
 
-/* —— 演示页 iOS 覆盖 —— */
+/* —— 演示页 iOS 覆盖（与 LiquidGlassDemo.cs 一致）—— */
 input[type=checkbox] {
-  width: 20px; height: 20px; background: rgba(255,255,255,0.14);
-  border-width: 1px; border-color: rgba(255,255,255,0.55); border-radius: 6px;
+  width: 20px; height: 20px; background-color: rgba(255,255,255,0.10);
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.28) 20%, rgba(255,255,255,0.04) 45%,
+      rgba(255,255,255,0.00) 80%, rgba(255,255,255,0.16) 100%);
+  border-width: 1px; border-color: rgba(255,255,255,0.50); border-radius: 6px;
 }
-input[type=checkbox]:checked { background: #0A84FF; border-color: #0A84FF; }
-input[type=range] slidertrack { height: 4px; margin-top: 7px; background: rgba(255,255,255,0.22); border-radius: 2px; }
-input[type=range] sliderprogress { height: 4px; margin-top: 0px; background: #0A84FF; border-radius: 2px; }
-input[type=range] sliderbar { width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px; border-radius: 9px; background: #ffffff; }
+input[type=checkbox]:checked {
+  background-color: #0A84FF;
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.30) 22%, rgba(255,255,255,0.05) 45%,
+      rgba(0,0,0,0.00) 62%, rgba(0,0,0,0.00) 82%, rgba(0,0,0,0.24) 100%);
+  border-color: rgba(255,255,255,0.85);
+}
+input[type=range] slidertrack {
+  height: 4px; margin-top: 7px; background-color: rgba(255,255,255,0.18);
+  decorator: linear-gradient(180deg,
+      rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.08) 45%, rgba(255,255,255,0.15) 100%);
+  border-radius: 2px;
+}
+input[type=range] sliderprogress {
+  height: 4px; margin-top: 0px; background-color: #0A84FF;
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.12) 40%, rgba(0,0,0,0.00) 62%, rgba(0,0,0,0.22) 100%);
+  border-radius: 2px;
+}
+input[type=range] sliderbar {
+  width: 18px; height: 18px; margin-top: 0px; margin-left: -9px; margin-right: -9px;
+  border-radius: 9px; background-color: #ffffff;
+  decorator: linear-gradient(180deg,
+      rgba(255,255,255,1.0) 0%, rgba(255,255,255,0.75) 42%, rgba(214,224,248,0.55) 100%);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+}
 ";
     }
 }
