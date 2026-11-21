@@ -32,3 +32,8 @@ Thumbs.db
 .DS_Store
 
 native/build_log.txt
+
+# ---- Offscreen self-test artifacts (when run from the repo root) ----
+/out.png
+/glass-*.png
+/WebGUINative.dll

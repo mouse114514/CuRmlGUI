@@ -187,6 +187,18 @@ view.BackdropBlurMode = BackdropBlurMode.Real;   // Skia 高斯模糊，开销�
 `Real` 模式的耗时与元素面积成正比：在 CPU 上，400×260 约需 2.6 ms，
 800×520 约需 14.9 ms，全屏约需 81 ms。
 
+### 7.4 文字投影与描边
+
+RmlUi 没有 `text-shadow` 属性，改用 `font-effect`；它还支持 `glow` 与 `blur`：
+
+```css
+.card-title { font-effect: shadow(0px 1px rgba(0, 0, 0, 0.55)), blur(1px); }
+.card-label { font-effect: outline(1px rgba(255, 255, 255, 0.35)); }
+```
+
+`box-shadow` 支持 `inset`、模糊、扩散与逗号分隔的多重阴影。外阴影需要有非零偏移
+或扩散才可见，因为 RmlUi 会把它裁剪到边框盒之外。
+
 ## 8. 自定义滤镜
 
 滤镜必须在载入文档之前注册，因为 RmlUi 在解析 CSS 时就需要对应的实例化器：

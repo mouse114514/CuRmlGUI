@@ -205,6 +205,20 @@ the result to the element.
 `Real` mode costs time proportional to element area: about 2.6 ms for 400×260,
 14.9 ms for 800×520 and 81 ms for the full screen on the CPU.
 
+### 7.4 Text shadows and outlines
+
+RmlUi has no `text-shadow` property. Use `font-effect` instead, which also accepts
+`glow` and `blur`:
+
+```css
+.card-title { font-effect: shadow(0px 1px rgba(0, 0, 0, 0.55)), blur(1px); }
+.card-label { font-effect: outline(1px rgba(255, 255, 255, 0.35)); }
+```
+
+Box shadows support `inset`, blur, spread and comma-separated lists. An outer shadow
+needs a non-zero offset or spread to be visible, because RmlUi clips it to the region
+outside the border box.
+
 ## 8. Custom filters
 
 Register a filter before loading the document, because RmlUi needs the instancer

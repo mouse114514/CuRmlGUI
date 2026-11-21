@@ -27,8 +27,9 @@ not suitable for production use.
 
 - **HTML/CSS semantics.** Elements, `position`, `margin` and `padding`,
   `border-radius`, `:hover` and `:active`, `rgba()`, `overflow: hidden`, flexbox
-  (including `flex-wrap`), gradients, transforms, transitions and keyframe
-  animations are provided by RmlUi itself.
+  (including `flex-wrap`), gradients, transforms, transitions, keyframe
+  animations, `box-shadow` (including `inset`) and `font-effect` text shadows and
+  outlines are provided by RmlUi itself.
 - **Render backend that follows the official RmlUi contract.** Scissor regions,
   clip masks for rounded clipping, off-screen layers, `filter` and
   `backdrop-filter`, `mask-image`, gradient shaders and 2D transforms are

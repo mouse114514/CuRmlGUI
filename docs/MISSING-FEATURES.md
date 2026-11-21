@@ -5,8 +5,8 @@
 This document records which CSS features are available when building interfaces
 with CuRmlGUI, and which are not. It covers RmlUi 6.3 as compiled by this
 repository, the Skia compositor and the shim. The conclusions are based on the RmlUi
-sources (`StyleSheetSpecification`, `DecoratorGradient`, `PropertyParserDecorator`,
-`ElementStyle`) and on `SkiaCompositor.CompileFilter`.
+sources (`StyleSheetSpecification`, `PropertyParserBoxShadow`, `DecoratorGradient`,
+`ElementStyle`) and are verified by the offscreen self-test in `tools/render-test`.
 
 ## 1. Supported today
 
@@ -23,7 +23,9 @@ sources (`StyleSheetSpecification`, `DecoratorGradient`, `PropertyParserDecorato
 **Boxes and painting**
 
 - `background-color`, per-side `border-width` and `border-color`, `border-radius`.
-- `box-shadow`, outer shadows only.
+- `box-shadow`, including `inset`, blur, spread and comma-separated lists.
+  An outer shadow needs a non-zero offset or spread to be visible, because RmlUi
+  clips it to the region outside the border box.
 - `opacity`, `mask-image` (the compositor supports masks).
 - `image-color` for tinting decorative images, and `fill-image`.
 - `decorator`: `image`, `tiled-box`, `tiled-horizontal`, `tiled-vertical`,
@@ -35,7 +37,10 @@ sources (`StyleSheetSpecification`, `DecoratorGradient`, `PropertyParserDecorato
   `line-height`.
 - `text-align`, `text-decoration`, `text-transform`, `text-overflow`,
   `white-space`, `word-break`, `vertical-align`.
-- `font-effect` such as `glow`, and `caret-color`.
+- `caret-color`.
+- `font-effect`: `glow`, `shadow(offset-x offset-y color)`, `outline(width color)`
+  and `blur(sigma)`. These cover text shadow and text outline; they can be combined
+  in a comma-separated list.
 
 **Effects**
 
@@ -58,49 +63,38 @@ input is provided by the library.
 RmlUi has no pseudo-element support. Specular overlays, gradient dimmers and other
 decorative nodes require a real element in the markup.
 
-### 2.2 `box-shadow: inset`
-
-Inset shadows are ignored and only outer shadows render. The inner rim highlight of
-a glass panel has to be approximated with a bright `border` and an overlay gradient.
-
-### 2.3 Gradients as `background`
+### 2.2 Gradients as `background`
 
 A gradient can only be used through `decorator: linear-gradient(...)`, not as a
 background image, and it cannot be combined or stacked with `background-color` or
 multiple background layers. Combining a translucent base, a top highlight and an
 edge gradient therefore requires several nested elements.
 
-### 2.4 `text-shadow`
-
-There is no `text-shadow`, and `font-effect: glow(color)` only approximates a halo.
-Text cannot have a drop shadow or an outline, which limits readability over busy
-backgrounds.
-
-### 2.5 `clip-path`
+### 2.3 `clip-path`
 
 Clipping is limited to rounded rectangles. Shapes such as `inset`, `circle` or
 `polygon` are unavailable, so pill and capsule shapes rely on `border-radius`.
 
-### 2.6 CSS grid
+### 2.4 CSS grid
 
 Only flexbox is available. Card grids require `flex-wrap` or explicit widths.
 
-### 2.7 `position: sticky`
+### 2.5 `position: sticky`
 
 Sticky headers must be approximated with `fixed` or `absolute` positioning.
 
-### 2.8 `aspect-ratio`
+### 2.6 `aspect-ratio`
 
 Square or fixed-ratio cards need an explicit height.
 
-### 2.9 `outline`
+### 2.7 `outline`
 
-Focus rings must use `border`, which affects layout, or an outer `box-shadow`.
+There is no box-level `outline` property. Focus rings must use `border`, which
+affects layout, or an outer `box-shadow`. Text outlines are available through
+`font-effect: outline(...)`.
 
-### 2.10 Smaller items
+### 2.8 Smaller items
 
-- Multiple comma-separated `box-shadow` values and multiple background layers
-  appear to be limited to a single entry.
 - `::selection` and `::placeholder` styling is partial or absent.
 - Units `dp`, `px`, `em` and `%` are supported; `vw`, `vh` and `calc()` need
   per-case verification.

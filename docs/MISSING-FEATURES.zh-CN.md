@@ -1,11 +1,11 @@
 # CuRmlGUI 能力缺口
 
-**English** | [简体中文](MISSING-FEATURES.zh-CN.md)
+[English](MISSING-FEATURES.md) | **简体中文**
 
 本文记录使用 CuRmlGUI 构建界面时，哪些 CSS 能力可用、哪些不可用。
 范围包括本仓库编译的 RmlUi 6.3、Skia 合成器与适配层。结论依据 RmlUi 源码
-（`StyleSheetSpecification`、`DecoratorGradient`、`PropertyParserDecorator`、
-`ElementStyle`）与 `SkiaCompositor.CompileFilter` 的实现。
+（`StyleSheetSpecification`、`PropertyParserBoxShadow`、`DecoratorGradient`、
+`ElementStyle`），并由 `tools/render-test` 的离屏自检验证。
 
 ## 1. 当前已支持
 
@@ -22,7 +22,8 @@
 **盒模型与绘制**
 
 - `background-color`、逐边 `border-width` 与 `border-color`、`border-radius`。
-- `box-shadow`，仅支持外阴影。
+- `box-shadow`，支持 `inset`、模糊、扩散（spread）以及逗号分隔的多重阴影。
+  外阴影需要有非零偏移或扩散才可见，因为 RmlUi 会把它裁剪到边框盒之外。
 - `opacity`、`mask-image`（合成器支持遮罩）。
 - `image-color` 用于给装饰图染色，以及 `fill-image`。
 - `decorator`：`image`、`tiled-box`、`tiled-horizontal`、`tiled-vertical`、
@@ -34,7 +35,9 @@
   `line-height`。
 - `text-align`、`text-decoration`、`text-transform`、`text-overflow`、
   `white-space`、`word-break`、`vertical-align`。
-- `font-effect`（例如 `glow`）与 `caret-color`。
+- `caret-color`。
+- `font-effect`：`glow`、`shadow(offset-x offset-y color)`、`outline(width color)`
+  与 `blur(sigma)`。它们覆盖文字投影与文字描边，并可用逗号组合成列表。
 
 **效果**
 
@@ -55,46 +58,36 @@
 
 RmlUi 不支持伪元素。高光罩、渐变压暗以及其他装饰节点都必须在标记中用真实元素实现。
 
-### 2.2 `box-shadow: inset`
-
-内阴影会被忽略，只有外阴影生效。玻璃面板的内缘高光只能用亮色 `border`
-配合叠加渐变来近似。
-
-### 2.3 以 `background` 使用渐变
+### 2.2 以 `background` 使用渐变
 
 渐变只能通过 `decorator: linear-gradient(...)` 使用，不能作为背景图像，
 也无法与 `background-color` 或多层背景叠加。因此，组合半透明白底、顶部高光
 与边缘渐变需要多个嵌套元素。
 
-### 2.4 `text-shadow`
-
-没有 `text-shadow`，`font-effect: glow(color)` 只能近似光晕。文字无法添加投影或描边，
-在复杂背景上的可读性因此受限。
-
-### 2.5 `clip-path`
+### 2.3 `clip-path`
 
 裁剪目前限于圆角矩形，无法使用 `inset`、`circle`、`polygon` 等形状，
 药丸与胶囊形状只能依赖 `border-radius`。
 
-### 2.6 CSS grid
+### 2.4 CSS grid
 
 只有 flex 布局可用。卡片网格需要 `flex-wrap` 或显式宽度。
 
-### 2.7 `position: sticky`
+### 2.5 `position: sticky`
 
 吸顶标题只能用 `fixed` 或 `absolute` 近似。
 
-### 2.8 `aspect-ratio`
+### 2.6 `aspect-ratio`
 
 正方形或固定比例的卡片需要显式指定高度。
 
-### 2.9 `outline`
+### 2.7 `outline`
 
-焦点描边只能使用会影响布局的 `border`，或使用外阴影近似。
+没有盒级的 `outline` 属性。焦点描边只能使用会影响布局的 `border`，
+或使用外阴影近似。文字描边可使用 `font-effect: outline(...)`。
 
-### 2.10 其他小项
+### 2.8 其他小项
 
-- 逗号分隔的多重 `box-shadow` 与多层背景似乎只支持单层。
 - `::selection` 与 `::placeholder` 的样式支持不完整或缺失。
 - `dp`、`px`、`em` 与 `%` 可用；`vw`、`vh` 与 `calc()` 需要逐项确认。
 

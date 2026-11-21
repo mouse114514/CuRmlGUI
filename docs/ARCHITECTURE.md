@@ -299,7 +299,8 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Build
 ```
 
 `tools/render-test` is an offscreen self-test. It asserts coordinates, colour
-order, premultiplication, glyph rendering, clipping, `Modulate` blending and
-backdrop orientation pixel by pixel, so rendering defects surface before the game
-starts. Copy the newly built `WebGUINative.dll` into the test output directory
-first; otherwise `DllImport` resolves a stale copy.
+order, premultiplication, glyph rendering, clipping, `Modulate` blending, inset and
+outer box shadows, font effects and backdrop orientation pixel by pixel, so
+rendering defects surface before the game starts. Copy the newly built
+`WebGUINative.dll` into the test output directory first; otherwise `DllImport`
+resolves a stale copy.

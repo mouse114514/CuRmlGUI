@@ -499,14 +499,21 @@ namespace CuRmlGUI.Render
 
                     switch (operation)
                     {
-                        case 1:   // SetInverse：先把包围盒铺满，再擦掉几何区
-                            if (!bounds.IsEmpty)
+                        case 1:   // SetInverse：先把整个裁剪区域铺满，再擦掉几何区
+                            // 必须铺满 scissor 而不是只铺几何包围盒：外阴影/模糊要画到元素盒之外，
+                            // 遮罩若只覆盖包围盒，盒外的阴影会被裁掉。
+                        {
+                            var full = ClampToViewport(_scissorEnabled
+                                ? _scissor
+                                : new SKRect(0, 0, Width, Height));
+                            if (!full.IsEmpty)
                             {
                                 using (var fill = new SKPaint { Color = SKColors.White, BlendMode = SKBlendMode.Src })
-                                    _clipMaskCanvas.DrawRect(bounds, fill);
+                                    _clipMaskCanvas.DrawRect(full, fill);
                             }
                             paint.BlendMode = SKBlendMode.Clear;
                             break;
+                        }
                         case 2:   // Intersect：现有遮罩 × 新几何覆盖度
                             paint.BlendMode = SKBlendMode.DstIn;
                             break;

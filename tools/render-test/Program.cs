@@ -216,6 +216,9 @@ namespace CuRmlGUI.RenderTest
             // UV 映射诊断：渐变网格 backdrop，暴露 UV 错位/三角形化错误（X 形）。
             s_failures += BackdropTest.RunPatterns(flip);
 
+            // box-shadow: inset（裁剪遮罩路径）与 font-effect: shadow()（文字投影）。
+            s_failures += EffectsTest.Run(flip, font, family);
+
             Console.WriteLine(s_failures == 0 ? "ALL CHECKS PASSED" : $"{s_failures} CHECK(S) FAILED");
 
             NativeMethods.wg_context_destroy(s_ctx);

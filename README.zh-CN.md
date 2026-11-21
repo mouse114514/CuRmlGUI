@@ -22,7 +22,8 @@ SkiaSharp 负责将绘制指令光栅化并合成为位图，再由一张 Unity 
 
 - **完整沿用 HTML/CSS 语义。** 元素、`position`、`margin` 与 `padding`、`border-radius`、
   `:hover` 与 `:active`、`rgba()`、`overflow: hidden`、flex 布局（含 `flex-wrap`）、
-  渐变、变换、过渡与关键帧动画均由 RmlUi 原生实现。
+  渐变、变换、过渡、关键帧动画、`box-shadow`（含 `inset`）以及 `font-effect`
+  的文字投影与描边均由 RmlUi 原生实现。
 - **与官方 RmlUi 后端保持一致的渲染接口。** 裁剪区域、用于圆角裁剪的遮罩、离屏图层、
   `filter` 与 `backdrop-filter`、`mask-image`、渐变着色器以及二维变换，均通过把
   `RmlUi_Renderer_GL3` 的每个回调映射到等价的 Skia 操作来实现。
