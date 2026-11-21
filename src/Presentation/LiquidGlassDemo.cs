@@ -502,15 +502,17 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 .music { display: flex; }
 .album {
   width: 60px; height: 60px; border-radius: 14px;
-  background-color: #5b6cff;
-  decorator: linear-gradient(130deg, #4facfe, #7b61ff 55%, #f857a6);
+  background-color: rgba(255,255,255,0.12);
+  decorator: linear-gradient(130deg, rgba(140,180,255,0.55), rgba(170,150,255,0.35) 55%, rgba(140,200,255,0.45));
 }
 .m-meta { flex: 1; padding-left: 12px; }
 .m-title { font-size: 15px; font-weight: bold; }
 .m-sub { font-size: 12px; color: rgba(255,255,255,0.70); }
 .m-play {
   width: 40px; height: 26px; border-radius: 13px;
-  background-color: rgba(255,255,255,0.92); color: #0A84FF;
+  background-color: rgba(255,255,255,0.22); color: #ffffff;
+  border-width: 1px; border-color: rgba(255,255,255,0.40);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.40);
   text-align: center; line-height: 26px; font-size: 10px; font-weight: bold;
 }
 
@@ -620,17 +622,17 @@ input[type=range] sliderbar:active {
 .cp-box {
   flex: 1; height: 44px; border-radius: 12px;
   text-align: center; line-height: 44px; font-size: 12px;
-  color: rgba(0,0,0,0.75);
-  background-color: rgba(255,255,255,0.60);
+  color: #ffffff;
+  background-color: rgba(255,255,255,0.20);
   border-width: 1px;
-  border-color: rgba(255,255,255,0.80);
+  border-color: rgba(255,255,255,0.40);
   box-shadow:
-      inset 0 1px 1px rgba(255,255,255,0.80),
-      0 3px 8px rgba(0,0,0,0.18);
+      inset 0 1px 1px rgba(255,255,255,0.55),
+      0 4px 10px rgba(0,0,0,0.35);
 }
 .cp-shadow  { text-shadow: 0px 2px 3px rgba(0,0,0,0.35); }
 .cp-outline { outline: 2px solid rgba(10,132,255,0.70); }
-.cp-gradient { background: linear-gradient(135deg, rgba(140,180,255,0.60), rgba(200,225,255,0.30) 55%, rgba(140,200,255,0.50)); }
+.cp-gradient { background: linear-gradient(135deg, rgba(140,180,255,0.40), rgba(200,225,255,0.15) 55%, rgba(140,200,255,0.28)); }
 .cp-outline, .cp-gradient { margin-left: 12px; }
 ";
     }
