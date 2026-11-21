@@ -32,18 +32,19 @@ namespace CuRmlGUI
         private int _renderLinger;
 
         // 动画驱动的重绘限速：连续动画（旋转/脉冲/波形）会让 wg_update_delay 恒为 0，
-        // 若每帧都全量重绘（Skia 合成 + 8MB 纹理上传），会明显拖低帧率。默认限到 ~30fps，
-        // 既保持动画流畅，又把重绘成本减半；输入/文档/backdrop 触发的立即重绘不受此限速
-        // 影响。消费方可通过 <see cref="AnimationRenderInterval"/> 调整（设为 0 表示不限速，
-        // 即恢复「每帧重绘」的旧行为）。
+        // 若每帧都全量重绘（Skia 合成 + 8MB 纹理上传），会明显拖低帧率。默认上限 30fps，
+        // 既保持动画流畅，又把重绘成本减半；输入/文档/backdrop 触发的立即重绘不受此限速影响。
+        // 这是给**模组开发者**的代码级 API（在自己的代码里设 view.MaxRenderFps = ...），
+        // 不是 BepInEx 配置项——配置项是面向最终用户的，开发者无法更改用户机器上的配置。
         private float _lastRenderTime = -1f;
 
         /// <summary>
-        /// 连续动画驱动的最小重绘间隔（秒）。默认 <c>1/30</c>（约 30fps）。
-        /// 设为 0 或负值表示不限速（每帧重绘，CPU 占用更高）。
+        /// 连续动画驱动的最大重绘帧率（fps）。默认 30。
+        /// 设为 0 或负值表示不限速（每帧重绘，CPU 占用更高）；正数则限制为对应帧率。
         /// 仅影响「纯动画」驱动的重绘；输入、文档变更、backdrop 更新仍立即重绘。
+        /// 供模组开发者在代码中按需调整。
         /// </summary>
-        public float AnimationRenderInterval { get; set; } = 1f / 30f;
+        public float MaxRenderFps { get; set; } = 30f;
 
         // 上一次转发的鼠标位置（去重，避免调用方每帧转发导致每帧重绘）。
         private float _lastMouseX = float.NaN, _lastMouseY = float.NaN;
@@ -323,12 +324,12 @@ select selectbox option:hover {
 
             // 渲染判定：
             //  - 输入/文档/backdrop 变更 → linger（立即渲染 + 传播 2 帧）；
-            //  - 纯连续动画 → 按 AnimationRenderInterval 限速（默认 ~30fps）。
+            //  - 纯连续动画 → 按 MaxRenderFps 限速（默认 30fps，0 表示不限速）。
             bool render = _renderLinger > 0;
             if (!render && NativeMethods.wg_update_delay(_ctx) <= 0.0)
             {
-                float interval = AnimationRenderInterval;
-                if (interval <= 0f || UnityEngine.Time.unscaledTime - _lastRenderTime >= interval)
+                float fps = MaxRenderFps;
+                if (fps <= 0f || UnityEngine.Time.unscaledTime - _lastRenderTime >= 1f / fps)
                     render = true;
             }
 
