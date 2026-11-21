@@ -474,13 +474,13 @@ body { width: 100%; height: 100%; font-family: __FAMILY__; pointer-events: none;
 /* 液态玻璃：GPU 玻璃层负责模糊/圆角；RmlUi 只画文字、边框与高光 */
 .card {
   pointer-events: auto;             /* 组件默认可拦截；容器/body 已声明 none */
-  background-color: rgba(255,255,255,0.55);  /* 半透明白色（叠加玻璃，不是纯白实心） */
+  background-color: rgba(255,255,255,0.22);  /* 更透的白（透出玻璃） */
   decorator: linear-gradient(180deg,
-      rgba(255,255,255,0.55) 0%,
-      rgba(255,255,255,0.12) 2%,
-      rgba(255,255,255,0.00) 9%,
-      rgba(255,255,255,0.00) 91%,
-      rgba(255,255,255,0.16) 100%);
+      rgba(255,255,255,0.50) 0%,      /* 顶部亮白（渐变层次） */
+      rgba(255,255,255,0.18) 18%,
+      rgba(255,255,255,0.00) 55%,     /* 中间透出玻璃 */
+      rgba(255,255,255,0.00) 88%,
+      rgba(255,255,255,0.08) 100%);   /* 底部微光 */
   border-width: 1px;
   border-color: rgba(255,255,255,0.45);
   border-radius: 30px;
